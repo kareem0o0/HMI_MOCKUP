@@ -1,0 +1,86 @@
+1) Is the system cloud-based, edge-based, or hybrid?
+-The system is Hybrid based on your prefrence 
+
+2) Can it operate offline if internet drops?
+-Yes, it can operate 100% offline with Auto sync ,Once the connection is restored, the system automatically "back-fills" the missing data to the cloud so your history stays complete.
+
+3) Where is data stored?
+-We typically deploy on AWS or Azure, but the system is cloud-agnostic. The database can be hosted on public cloud, private cloud, or client infrastructure based on your regulatory requirements.
+
+4) Who owns the data?
+-you own 100% of the data ,as the provider, we only need access to the data necessary for technical maintenance and updates ,The raw system data, usage patterns, and efficiency logs are your intellectual property.
+
+5) What connectivity options are supported? (4G, 5G, Ethernet, Wi-Fi, LoRa?)
+-We support 4G LTE (Global), Ethernet, and Wi-Fi as standard.
+
+6) What happens if SIM fails?
+-like in the internet drop case ,the system switches to offline mode and buffers all sensor data locally. Once the connection is restored, the stored data is automatically synchronized with the server.
+
+7)Can we switch telecom providers easily?
+-Yes, absolutely.
+
+8) Integration
+-yes. Our hardware is custom-engineered and purpose-built specifically for this system's architecture. We do not use 'one-size-fits-all' screens. Instead, our HMI and Controller boards are selected and configured based on your exact system requirements including analog/digital signals ranges as well as most of the existing industrial communication protocols
+
+9) Is the system encrypted end-to-end?
+-Yes. All cloud telemetry and remote commands are encrypted via TLS 1.3.
+
+10) Can we remotely shut down a unit?
+-Yes. Authorized admins can trigger an immediate, safe shutdown remotely.
+
+11) Can firmware be updated over-the-air?
+-yes
+
+12) How do you prevent hacking?
+-The system is built with end-to-end encryption for all monitoring and remote control as a standard. Beyond this, we can integrate additional security layers—such as private APNs or hardware-level authentication—tailored to your specific site requirement.
+
+13) Who has admin access? Can we create tiered levels?
+-You have full control , and yes ,the system support tiered levels, you define who can see, do, and control what.
+
+14) what the dashboard can display ?
+-everything you mentioned as long as we have the needed hardware (sensors) to measure it .
+
+15) Can customers see usage data?
+-yes ,concidered as an extend to the previous tiered levels question.
+
+16) Can we white-label the interface fully?
+-Yes. The system is costume designed to be "Your Brand, Powered by Our Technology." , The web URL (e.g., monitor.yourcompany.com) and the dashboard logo, fonts, and "Look and Feel" will be 100% yours. We stay invisible in the background as the technical partner.
+
+17) Can it be accessed via mobile app and desktop?
+-yes, that is an option.
+
+18) Are they charging per device?
+-yes ,but with a volume discounts as you scale.
+
+19) is there a monthly SaaS or data hosting fee?
+-yes. A monthly or annual service fee covers 4G connectivity, secure cloud hosting, encrypted data storage, and the 24/7 monitoring infrastructure. But alternative commercial arrangements can be discussed depending on project scope.
+
+20) Is there a long-term contract lock-in?
+-No ,We offer annual service agreements to guarantee uptime and security updates, but we do not "lock" your hardware. If you are unhappy with the cloud service, the hardware still functions locally.
+
+21) Can we eventually bring this in-house?
+-We can discuss a "Buy-out" or "Source-Code Licensing" agreement in the future if you decide to build a full internal team.
+
+22) Can this support 40,000+ devices?
+-Yes. The architecture is Elastic, meaning we add server capacity automatically as you deploy more units.
+
+23) Have they managed infrastructure at this scale before?
+-While our company has not yet deployed at that scale, the platform is built on industry-standard cloud infrastructure that routinely supports millions of concurrent connections. The scalability and high-availability mechanisms are provided by the underlying cloud provider (AWS or Azure).
+
+24) What uptime guarantee (SLA) do they offer?
+-We offer a 99% to 99.9% uptime SLA for the cloud dashboard and remote control features,and since the controls are done the locally, even if the cloud goes down , the system doesn't stop running. Only the remote monitoring is briefly paused.
+
+25) What redundancy systems exist?
+-We use a multi-layer redundancy approach. The cloud infrastructure provides built-in high availability, automated data replication, and multi-region deployment options. At the device level, data is buffered locally during connectivity loss and automatically synchronized once the connection is restored, ensuring continuous data integrity. Additional backup strategies can be configured based on deployment requirements.
+
+26) Hardware Considerations
+-Our dashboard solutions are available in multiple industrial-grade variants and models with different environmental ratings (temperature range, dust protection, and power tolerance). We select the appropriate model based on the operating conditions and project requirements agreed upon you. Specifications such as operating temperature, durability, failure rate, and expected lifespan depend on the chosen configuration and can be provided accordingly.
+
+27) Who owns the firmware and the dashboard design?
+- You own the visual design and application logic, we provide a lifetime license for using firmware .
+
+28)Can we access raw system data?
+-Yes. You have full, unrestricted access to all raw telemetry and historical data.
+
+29)Strategic Assess
+-We are not a service provider,We build the physical interface, the control logic, and the cloud gateway as a single, unified system.
