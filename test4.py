@@ -247,6 +247,47 @@ def _resolve_alarm(sensor_key: str, sensor: Sensor, now: datetime):
     })
 
 
+def _activate_system_alarm(alarm_key: str, name: str, severity: str, message: str, now: datetime):
+    active = ACTIVE_ALARMS.get(alarm_key)
+    if active is not None:
+        return
+    rec = {
+        "id": _next_alarm_id(),
+        "name": name,
+        "type": "System",
+        "sensor_key": alarm_key,
+        "severity": severity,
+        "raised_at": now,
+        "cleared_at": None,
+        "duration_s": None,
+        "status": "Active",
+        "message": message,
+    }
+    ACTIVE_ALARMS[alarm_key] = rec
+    ALARM_HISTORY.appendleft(rec)
+    ALARMS.appendleft({
+        "time": now.strftime("%H:%M:%S"),
+        "sensor": "System",
+        "level": severity,
+        "msg": message,
+    })
+
+
+def _resolve_system_alarm(alarm_key: str, message: str, now: datetime):
+    active = ACTIVE_ALARMS.pop(alarm_key, None)
+    if active is None:
+        return
+    active["cleared_at"] = now
+    active["duration_s"] = (now - active["raised_at"]).total_seconds()
+    active["status"] = "Resolved"
+    ALARMS.appendleft({
+        "time": now.strftime("%H:%M:%S"),
+        "sensor": "System",
+        "level": "OK",
+        "msg": f"{message} ({_duration_text(active['duration_s'])})",
+    })
+
+
 def _gen_alarm_seed():
     """Seed historical alarm log with resolved events for realism."""
     for i in range(10):
@@ -1385,6 +1426,7 @@ def main(page: ft.Page):
     refs: dict = {}          # live-update reference store
     current_page = {"idx": 0}
     selected_sensor = {"key": None}
+    emergency_state = {"active": False}
 
     # â”€â”€ Build all pages once (lazy rebuild on nav) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     pages_cache = {}
@@ -1420,6 +1462,59 @@ def main(page: ft.Page):
     # â”€â”€ Top bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     clock_ref   = ft.Ref[ft.Text]()
     alarm_badge = ft.Ref[ft.Text]()
+    live_dot_ref = ft.Ref[ft.Icon]()
+    live_txt_ref = ft.Ref[ft.Text]()
+    estop_txt_ref = ft.Ref[ft.Text]()
+    status_dot_ref = ft.Ref[ft.Icon]()
+    status_msg_ref = ft.Ref[ft.Text]()
+    mode_msg_ref = ft.Ref[ft.Text]()
+
+    def refresh_operation_ui():
+        estop = emergency_state["active"]
+        if live_dot_ref.current:
+            live_dot_ref.current.color = C["red"] if estop else C["green"]
+        if status_dot_ref.current:
+            status_dot_ref.current.color = C["red"] if estop else C["green"]
+        if live_txt_ref.current:
+            live_txt_ref.current.value = "STOPPED" if estop else "LIVE"
+            live_txt_ref.current.color = C["red"] if estop else C["green"]
+        if estop_txt_ref.current:
+            estop_txt_ref.current.value = "RESET" if estop else "E-STOP"
+        if status_msg_ref.current:
+            status_msg_ref.current.value = (
+                "Emergency stop active - operations halted"
+                if estop else "All systems nominal"
+            )
+            status_msg_ref.current.color = C["red"] if estop else C["gray"]
+        if mode_msg_ref.current:
+            mode_msg_ref.current.value = (
+                "Simulation paused  •  Emergency stop engaged"
+                if estop else "Simulation mode  •  Mock data only"
+            )
+
+    def set_emergency_stop(active: bool):
+        now = datetime.now()
+        if active and not emergency_state["active"]:
+            emergency_state["active"] = True
+            _activate_system_alarm(
+                "system_estop",
+                "Emergency Stop Activated",
+                "CRITICAL",
+                "Emergency stop pressed - all operations halted",
+                now,
+            )
+        elif (not active) and emergency_state["active"]:
+            emergency_state["active"] = False
+            _resolve_system_alarm(
+                "system_estop",
+                "Emergency stop cleared - operations resumed",
+                now,
+            )
+        refresh_operation_ui()
+        page.update()
+
+    def on_estop_click(_):
+        set_emergency_stop(not emergency_state["active"])
 
     topbar = ft.Container(
         bgcolor=C["header"],
@@ -1452,8 +1547,21 @@ def main(page: ft.Page):
                     on_click=lambda e: switch_page(4),
                 ),
                 ft.Container(width=16),
-                ft.Icon(ft.Icons.CIRCLE, color=C["green"], size=8),
-                ft.Text("LIVE", color=C["green"], size=11,
+                ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.WARNING_AMBER, color=C["white"], size=14),
+                        ft.Text("E-STOP", ref=estop_txt_ref, color=C["white"], size=10,
+                                weight=ft.FontWeight.W_700),
+                    ], spacing=4),
+                    bgcolor=C["red"],
+                    border_radius=6,
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                    ink=True,
+                    on_click=on_estop_click,
+                ),
+                ft.Container(width=12),
+                ft.Icon(ft.Icons.CIRCLE, ref=live_dot_ref, color=C["green"], size=8),
+                ft.Text("LIVE", ref=live_txt_ref, color=C["green"], size=11,
                         weight=ft.FontWeight.W_700),
                 ft.Container(width=16),
                 ft.Text("", ref=clock_ref, color=C["gray"], size=12),
@@ -1520,10 +1628,10 @@ def main(page: ft.Page):
         padding=ft.Padding.symmetric(horizontal=16, vertical=5),
         border=ft.Border(top=ft.BorderSide(1, C["border"])),
         content=ft.Row([
-            ft.Icon(ft.Icons.CIRCLE, color=C["green"], size=7),
-            ft.Text("All systems nominal", color=C["gray"], size=10),
+            ft.Icon(ft.Icons.CIRCLE, ref=status_dot_ref, color=C["green"], size=7),
+            ft.Text("All systems nominal", ref=status_msg_ref, color=C["gray"], size=10),
             ft.Container(expand=True),
-            ft.Text("Simulation mode  â€¢  Mock data only",
+            ft.Text("Simulation mode  â€¢  Mock data only", ref=mode_msg_ref,
                     color=C["gray2"], size=10),
         ], spacing=6),
     )
@@ -1538,6 +1646,7 @@ def main(page: ft.Page):
            vertical_alignment=ft.CrossAxisAlignment.STRETCH),
         statusbar,
     ], spacing=0, expand=True))
+    refresh_operation_ui()
 
     # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  SIMULATION + LIVE-UPDATE THREAD
@@ -1561,64 +1670,88 @@ def main(page: ft.Page):
     async def simulate():
         while True:
             try:
-                # Tick all sensors
-                for s in SENSORS.values():
-                    s.tick()
-
-                # Alarm lifecycle management (active + resolved + history)
                 now = datetime.now()
-                for key, s in SENSORS.items():
-                    if s.status == "OK":
-                        _resolve_alarm(key, s, now)
-                    else:
-                        _raise_or_update_alarm(key, s, now)
+                if not emergency_state["active"]:
+                    # Tick all sensors
+                    for s in SENSORS.values():
+                        s.tick()
 
-                fault_count = sum(
-                    1 for s in SENSORS.values() if s.status != "OK"
-                )
+                    # Alarm lifecycle management (active + resolved + history)
+                    for key, s in SENSORS.items():
+                        if s.status == "OK":
+                            _resolve_alarm(key, s, now)
+                        else:
+                            _raise_or_update_alarm(key, s, now)
+
+                    fault_count = sum(
+                        1 for s in SENSORS.values() if s.status != "OK"
+                    )
+                    dm = dashboard_metrics()
+                    DASH_HIST["avg_temp"].append(dm["avg_temp"])
+                    DASH_HIST["avg_pressure"].append(dm["avg_pressure"])
+                    DASH_HIST["total_flow"].append(dm["total_flow"])
+                    DASH_HIST["h2"].append(dm["h2"])
+                    DASH_HIST["o2"].append(dm["o2"])
+
+                    load_penalty = min(12.0, fault_count * 3.0)
+                    dash_state["elec_eff_target"] += random.uniform(-0.35, 0.35)
+                    dash_state["elec_eff_target"] = max(42.0, min(60.0, dash_state["elec_eff_target"] - load_penalty * 0.08))
+                    dash_state["elec_eff"] += (dash_state["elec_eff_target"] - dash_state["elec_eff"]) * 0.15 + random.uniform(-0.15, 0.15)
+                    dash_state["elec_eff"] = max(40.0, min(62.0, dash_state["elec_eff"]))
+                    dash_state["conv_eff"] = max(48.0, min(70.0, dash_state["elec_eff"] + 4.5 + random.uniform(-1.0, 1.0)))
+
+                    h2_rate_kg_h = max(1.2, min(10.0, (dm["total_flow"] * dm["h2"]) / 180.0))
+                    power_kw = h2_rate_kg_h * 33.3 * (dash_state["elec_eff"] / 100.0)
+                    power_kw = max(10.0, min(180.0, power_kw))
+                    voltage_v = max(360.0, min(760.0, 560.0 + random.uniform(-80.0, 90.0)))
+                    current_a = (power_kw * 1000.0) / max(voltage_v, 1.0)
+                    dash_state["perf_ratio"] = max(55.0, min(110.0, (power_kw / 120.0) * 100.0))
+
+                    step_hours = 1.5 / 3600.0
+                    dash_state["energy_kwh"] += power_kw * step_hours
+                    h2_used = h2_rate_kg_h * step_hours
+                    dash_state["h2_consumed_kg"] += h2_used
+                    split = random.uniform(0.45, 0.55)
+                    use_t1_target = h2_used * split
+                    use_t2_target = h2_used - use_t1_target
+                    take_t1 = min(dash_state["h2_t1_remaining_kg"], use_t1_target)
+                    leftover = h2_used - take_t1
+                    take_t2 = min(dash_state["h2_t2_remaining_kg"], use_t2_target + leftover)
+                    dash_state["h2_t1_remaining_kg"] = max(0.0, dash_state["h2_t1_remaining_kg"] - take_t1)
+                    dash_state["h2_t2_remaining_kg"] = max(0.0, dash_state["h2_t2_remaining_kg"] - take_t2)
+                    dash_state["h2_remaining_kg"] = (
+                        dash_state["h2_t1_remaining_kg"] + dash_state["h2_t2_remaining_kg"]
+                    )
+                    h2_remaining_pct = (dash_state["h2_remaining_kg"] / dash_state["h2_capacity_kg"]) * 100.0
+                    runtime_h = dash_state["h2_remaining_kg"] / max(h2_rate_kg_h, 0.05)
+
+                    DASH_HIST["power_kw"].append(power_kw)
+                    DASH_HIST["h2_rate"].append(h2_rate_kg_h)
+                    DASH_HIST["efficiency"].append(dash_state["elec_eff"])
+                else:
+                    fault_count = sum(1 for s in SENSORS.values() if s.status != "OK")
+                    dm = dashboard_metrics()
+                    DASH_HIST["avg_temp"].append(dm["avg_temp"])
+                    DASH_HIST["avg_pressure"].append(dm["avg_pressure"])
+                    DASH_HIST["total_flow"].append(dm["total_flow"])
+                    DASH_HIST["h2"].append(dm["h2"])
+                    DASH_HIST["o2"].append(dm["o2"])
+
+                    power_kw = 0.0
+                    h2_rate_kg_h = 0.0
+                    voltage_v = 0.0
+                    current_a = 0.0
+                    dash_state["elec_eff"] = 0.0
+                    dash_state["conv_eff"] = 0.0
+                    dash_state["perf_ratio"] = 0.0
+                    h2_remaining_pct = (dash_state["h2_remaining_kg"] / dash_state["h2_capacity_kg"]) * 100.0
+                    runtime_h = 0.0
+
+                    DASH_HIST["power_kw"].append(0.0)
+                    DASH_HIST["h2_rate"].append(0.0)
+                    DASH_HIST["efficiency"].append(0.0)
+
                 active_alarm_count = len(ACTIVE_ALARMS)
-                dm = dashboard_metrics()
-                DASH_HIST["avg_temp"].append(dm["avg_temp"])
-                DASH_HIST["avg_pressure"].append(dm["avg_pressure"])
-                DASH_HIST["total_flow"].append(dm["total_flow"])
-                DASH_HIST["h2"].append(dm["h2"])
-                DASH_HIST["o2"].append(dm["o2"])
-
-                load_penalty = min(12.0, fault_count * 3.0)
-                dash_state["elec_eff_target"] += random.uniform(-0.35, 0.35)
-                dash_state["elec_eff_target"] = max(42.0, min(60.0, dash_state["elec_eff_target"] - load_penalty * 0.08))
-                dash_state["elec_eff"] += (dash_state["elec_eff_target"] - dash_state["elec_eff"]) * 0.15 + random.uniform(-0.15, 0.15)
-                dash_state["elec_eff"] = max(40.0, min(62.0, dash_state["elec_eff"]))
-                dash_state["conv_eff"] = max(48.0, min(70.0, dash_state["elec_eff"] + 4.5 + random.uniform(-1.0, 1.0)))
-
-                h2_rate_kg_h = max(1.2, min(10.0, (dm["total_flow"] * dm["h2"]) / 180.0))
-                power_kw = h2_rate_kg_h * 33.3 * (dash_state["elec_eff"] / 100.0)
-                power_kw = max(10.0, min(180.0, power_kw))
-                voltage_v = max(360.0, min(760.0, 560.0 + random.uniform(-80.0, 90.0)))
-                current_a = (power_kw * 1000.0) / max(voltage_v, 1.0)
-                dash_state["perf_ratio"] = max(55.0, min(110.0, (power_kw / 120.0) * 100.0))
-
-                step_hours = 1.5 / 3600.0
-                dash_state["energy_kwh"] += power_kw * step_hours
-                h2_used = h2_rate_kg_h * step_hours
-                dash_state["h2_consumed_kg"] += h2_used
-                split = random.uniform(0.45, 0.55)
-                use_t1_target = h2_used * split
-                use_t2_target = h2_used - use_t1_target
-                take_t1 = min(dash_state["h2_t1_remaining_kg"], use_t1_target)
-                leftover = h2_used - take_t1
-                take_t2 = min(dash_state["h2_t2_remaining_kg"], use_t2_target + leftover)
-                dash_state["h2_t1_remaining_kg"] = max(0.0, dash_state["h2_t1_remaining_kg"] - take_t1)
-                dash_state["h2_t2_remaining_kg"] = max(0.0, dash_state["h2_t2_remaining_kg"] - take_t2)
-                dash_state["h2_remaining_kg"] = (
-                    dash_state["h2_t1_remaining_kg"] + dash_state["h2_t2_remaining_kg"]
-                )
-                h2_remaining_pct = (dash_state["h2_remaining_kg"] / dash_state["h2_capacity_kg"]) * 100.0
-                runtime_h = dash_state["h2_remaining_kg"] / max(h2_rate_kg_h, 0.05)
-
-                DASH_HIST["power_kw"].append(power_kw)
-                DASH_HIST["h2_rate"].append(h2_rate_kg_h)
-                DASH_HIST["efficiency"].append(dash_state["elec_eff"])
 
                 # â”€â”€ Clock & alarm badge (always visible) â”€â”€â”€â”€â”€â”€
                 clock_ref.current.value       = datetime.now().strftime("%H:%M:%S  %d %b %Y")
@@ -1661,7 +1794,10 @@ def main(page: ft.Page):
                             f"{dash_state['h2_capacity_kg']:.0f} kg"
                         )
                     if h2rt_ref and h2rt_ref.current:
-                        h2rt_ref.current.value = f"Estimated Runtime Remaining: {runtime_h:.1f} h"
+                        if emergency_state["active"]:
+                            h2rt_ref.current.value = "Estimated Runtime Remaining: Paused (E-STOP)"
+                        else:
+                            h2rt_ref.current.value = f"Estimated Runtime Remaining: {runtime_h:.1f} h"
                     if h2b_ref and h2b_ref.current:
                         h2b_ref.current.value = max(0.0, min(1.0, h2_remaining_pct / 100.0))
 
