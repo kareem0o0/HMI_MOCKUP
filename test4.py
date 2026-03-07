@@ -930,6 +930,56 @@ def build_dashboard(refs: dict):
         ft.Text("", ref=temp_stab_ref, color=C["gray"], size=11),
     ]), expand=True)
 
+    # Dual H2 tank rings
+    t1_pct_ref = ft.Ref[ft.Text]()
+    t1_ring_ref = ft.Ref[ft.ProgressRing]()
+    t1_vol_ref = ft.Ref[ft.Text]()
+    t2_pct_ref = ft.Ref[ft.Text]()
+    t2_ring_ref = ft.Ref[ft.ProgressRing]()
+    t2_vol_ref = ft.Ref[ft.Text]()
+    refs["db_fc_t1_pct"] = t1_pct_ref
+    refs["db_fc_t1_ring"] = t1_ring_ref
+    refs["db_fc_t1_vol"] = t1_vol_ref
+    refs["db_fc_t2_pct"] = t2_pct_ref
+    refs["db_fc_t2_ring"] = t2_ring_ref
+    refs["db_fc_t2_vol"] = t2_vol_ref
+
+    def tank_ring(label, pct_ref, ring_ref, vol_ref):
+        ring_size = 110
+        return ft.Column([
+            ft.Stack([
+                ft.Container(
+                    width=ring_size, height=ring_size,
+                    content=ft.ProgressRing(
+                        ref=ring_ref, value=1.0, stroke_width=10,
+                        color=C["green"], bgcolor=C["gray2"],
+                    ),
+                ),
+                ft.Container(
+                    width=ring_size, height=ring_size,
+                    alignment=ft.Alignment(0, 0),
+                    content=ft.Column([
+                        ft.Text("100%", ref=pct_ref, color=C["white"], size=17,
+                                weight=ft.FontWeight.BOLD),
+                        ft.Text(label, color=C["gray"], size=10,
+                                weight=ft.FontWeight.W_600),
+                    ], spacing=1, alignment=ft.MainAxisAlignment.CENTER,
+                       horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                ),
+            ], width=ring_size, height=ring_size),
+            ft.Text("", ref=vol_ref, color=C["gray"], size=10),
+        ], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+
+    tanks_card = card(ft.Column([
+        hdr("PROPANE_TANK", "Hydrogen Tank Levels"),
+        ft.Container(height=8),
+        ft.Row([
+            tank_ring("H2 Tank 1", t1_pct_ref, t1_ring_ref, t1_vol_ref),
+            ft.Container(width=18),
+            tank_ring("H2 Tank 2", t2_pct_ref, t2_ring_ref, t2_vol_ref),
+        ], alignment=ft.MainAxisAlignment.CENTER),
+    ]), expand=True)
+
     # Fuel-cell trend monitoring
     trend_ref = ft.Ref[ft.Row]()
     refs["db_fc_trend"] = trend_ref
@@ -959,7 +1009,9 @@ def build_dashboard(refs: dict):
     return ft.Column([
         ft.Row([power_card, h2_card, eff_card], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
         ft.Container(height=12),
-        ft.Row([health_card, trend_card], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
+        ft.Row([health_card, tanks_card], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
+        ft.Container(height=12),
+        ft.Row([trend_card], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
     ], spacing=0, expand=True)
 
 
@@ -1384,7 +1436,11 @@ def main(page: ft.Page):
     dash_state = {
         "energy_kwh": 0.0,
         "h2_capacity_kg": 120.0,
-        "h2_remaining_kg": 120.0,
+        "h2_remaining_kg": 84.0,
+        "h2_t1_capacity_kg": 70.0,
+        "h2_t1_remaining_kg": 42.0,
+        "h2_t2_capacity_kg": 50.0,
+        "h2_t2_remaining_kg": 42.0,
         "h2_consumed_kg": 0.0,
         "elec_eff_target": 52.0,
         "elec_eff": 52.0,
@@ -1436,7 +1492,17 @@ def main(page: ft.Page):
                 dash_state["energy_kwh"] += power_kw * step_hours
                 h2_used = h2_rate_kg_h * step_hours
                 dash_state["h2_consumed_kg"] += h2_used
-                dash_state["h2_remaining_kg"] = max(0.0, dash_state["h2_remaining_kg"] - h2_used)
+                split = random.uniform(0.45, 0.55)
+                use_t1_target = h2_used * split
+                use_t2_target = h2_used - use_t1_target
+                take_t1 = min(dash_state["h2_t1_remaining_kg"], use_t1_target)
+                leftover = h2_used - take_t1
+                take_t2 = min(dash_state["h2_t2_remaining_kg"], use_t2_target + leftover)
+                dash_state["h2_t1_remaining_kg"] = max(0.0, dash_state["h2_t1_remaining_kg"] - take_t1)
+                dash_state["h2_t2_remaining_kg"] = max(0.0, dash_state["h2_t2_remaining_kg"] - take_t2)
+                dash_state["h2_remaining_kg"] = (
+                    dash_state["h2_t1_remaining_kg"] + dash_state["h2_t2_remaining_kg"]
+                )
                 h2_remaining_pct = (dash_state["h2_remaining_kg"] / dash_state["h2_capacity_kg"]) * 100.0
                 runtime_h = dash_state["h2_remaining_kg"] / max(h2_rate_kg_h, 0.05)
 
@@ -1488,6 +1554,40 @@ def main(page: ft.Page):
                         h2rt_ref.current.value = f"Estimated Runtime Remaining: {runtime_h:.1f} h"
                     if h2b_ref and h2b_ref.current:
                         h2b_ref.current.value = max(0.0, min(1.0, h2_remaining_pct / 100.0))
+
+                    # Tank ring indicators
+                    t1_pct = (dash_state["h2_t1_remaining_kg"] / dash_state["h2_t1_capacity_kg"]) * 100.0
+                    t2_pct = (dash_state["h2_t2_remaining_kg"] / dash_state["h2_t2_capacity_kg"]) * 100.0
+
+                    def tank_col(pct):
+                        if pct > 60:
+                            return C["green"]
+                        if pct > 30:
+                            return C["amber"]
+                        return C["red"]
+
+                    t1p_ref = refs.get("db_fc_t1_pct")
+                    t1r_ref = refs.get("db_fc_t1_ring")
+                    t1v_ref = refs.get("db_fc_t1_vol")
+                    t2p_ref = refs.get("db_fc_t2_pct")
+                    t2r_ref = refs.get("db_fc_t2_ring")
+                    t2v_ref = refs.get("db_fc_t2_vol")
+
+                    if t1p_ref and t1p_ref.current:
+                        t1p_ref.current.value = f"{t1_pct:.0f}%"
+                    if t1r_ref and t1r_ref.current:
+                        t1r_ref.current.value = max(0.0, min(1.0, t1_pct / 100.0))
+                        t1r_ref.current.color = tank_col(t1_pct)
+                    if t1v_ref and t1v_ref.current:
+                        t1v_ref.current.value = f"{dash_state['h2_t1_remaining_kg']:.1f} / {dash_state['h2_t1_capacity_kg']:.0f} kg"
+
+                    if t2p_ref and t2p_ref.current:
+                        t2p_ref.current.value = f"{t2_pct:.0f}%"
+                    if t2r_ref and t2r_ref.current:
+                        t2r_ref.current.value = max(0.0, min(1.0, t2_pct / 100.0))
+                        t2r_ref.current.color = tank_col(t2_pct)
+                    if t2v_ref and t2v_ref.current:
+                        t2v_ref.current.value = f"{dash_state['h2_t2_remaining_kg']:.1f} / {dash_state['h2_t2_capacity_kg']:.0f} kg"
 
                     # Efficiency values
                     ee_ref = refs.get("db_fc_elec_eff")
