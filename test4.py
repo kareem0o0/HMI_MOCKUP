@@ -354,6 +354,50 @@ def draw_arc(value: float, size=170, stroke=12,
     return ft.Stack([canvas, overlay], width=size, height=size)
 
 
+def draw_ring_meter(value: float, size=116, stroke=12, color=C["green"]):
+    start = math.pi * 0.75
+    sweep_f = math.pi * 1.5
+    sweep_v = sweep_f * max(0.0, min(1.0, value))
+    pad = stroke + 2
+    d = size - pad * 2
+
+    def alpha(col, a):
+        return f"{col}{a}" if len(col) == 7 else col
+
+    shapes = [
+        cv.Arc(
+            x=pad, y=pad, width=d, height=d,
+            start_angle=start, sweep_angle=sweep_f,
+            paint=ft.Paint(
+                style=ft.PaintingStyle.STROKE,
+                stroke_width=stroke, color=C["gray2"],
+                stroke_cap=ft.StrokeCap.ROUND,
+            ),
+        )
+    ]
+    if sweep_v > 0.01:
+        shapes.append(cv.Arc(
+            x=pad, y=pad, width=d, height=d,
+            start_angle=start, sweep_angle=sweep_v,
+            paint=ft.Paint(
+                style=ft.PaintingStyle.STROKE,
+                stroke_width=stroke, color=color,
+                stroke_cap=ft.StrokeCap.ROUND,
+            ),
+        ))
+        shapes.append(cv.Arc(
+            x=pad, y=pad, width=d, height=d,
+            start_angle=start, sweep_angle=sweep_v,
+            paint=ft.Paint(
+                style=ft.PaintingStyle.STROKE,
+                stroke_width=max(2, int(stroke * 0.35)),
+                color=alpha(color, "88"),
+                stroke_cap=ft.StrokeCap.ROUND,
+            ),
+        ))
+    return cv.Canvas(shapes=shapes, width=size, height=size)
+
+
 def draw_spark(history, w=160, h=50, color=C["teal"]):
     """Mini sparkline from a deque of values."""
     vals = list(history)
@@ -932,10 +976,10 @@ def build_dashboard(refs: dict):
 
     # Dual H2 tank rings
     t1_pct_ref = ft.Ref[ft.Text]()
-    t1_ring_ref = ft.Ref[ft.ProgressRing]()
+    t1_ring_ref = ft.Ref[ft.Row]()
     t1_vol_ref = ft.Ref[ft.Text]()
     t2_pct_ref = ft.Ref[ft.Text]()
-    t2_ring_ref = ft.Ref[ft.ProgressRing]()
+    t2_ring_ref = ft.Ref[ft.Row]()
     t2_vol_ref = ft.Ref[ft.Text]()
     refs["db_fc_t1_pct"] = t1_pct_ref
     refs["db_fc_t1_ring"] = t1_ring_ref
@@ -944,22 +988,31 @@ def build_dashboard(refs: dict):
     refs["db_fc_t2_ring"] = t2_ring_ref
     refs["db_fc_t2_vol"] = t2_vol_ref
 
+    def _alpha(col, a):
+        return f"{col}{a}" if len(col) == 7 else col
+
     def tank_ring(label, pct_ref, ring_ref, vol_ref):
-        ring_size = 110
+        ring_size = 116
         return ft.Column([
             ft.Stack([
                 ft.Container(
-                    width=ring_size, height=ring_size,
-                    content=ft.ProgressRing(
-                        ref=ring_ref, value=1.0, stroke_width=10,
-                        color=C["green"], bgcolor=C["gray2"],
+                    width=ring_size + 12, height=ring_size + 12,
+                    border_radius=(ring_size + 12) / 2,
+                    gradient=ft.LinearGradient(
+                        begin=ft.Alignment(-1, -1),
+                        end=ft.Alignment(1, 1),
+                        colors=[_alpha(C["teal"], "2"), _alpha(C["gray2"], "10")],
                     ),
                 ),
+                ft.Row([draw_ring_meter(1.0, size=ring_size, stroke=12, color=C["green"])],
+                       ref=ring_ref,
+                       width=ring_size, height=ring_size,
+                       alignment=ft.MainAxisAlignment.CENTER),
                 ft.Container(
                     width=ring_size, height=ring_size,
                     alignment=ft.Alignment(0, 0),
                     content=ft.Column([
-                        ft.Text("100%", ref=pct_ref, color=C["white"], size=17,
+                        ft.Text("100%", ref=pct_ref, color=C["white"], size=18,
                                 weight=ft.FontWeight.BOLD),
                         ft.Text(label, color=C["gray"], size=10,
                                 weight=ft.FontWeight.W_600),
@@ -1559,12 +1612,9 @@ def main(page: ft.Page):
                     t1_pct = (dash_state["h2_t1_remaining_kg"] / dash_state["h2_t1_capacity_kg"]) * 100.0
                     t2_pct = (dash_state["h2_t2_remaining_kg"] / dash_state["h2_t2_capacity_kg"]) * 100.0
 
+                    # Keep both tanks visually identical (same color scheme)
                     def tank_col(pct):
-                        if pct > 60:
-                            return C["green"]
-                        if pct > 30:
-                            return C["amber"]
-                        return C["red"]
+                        return C["teal"]
 
                     t1p_ref = refs.get("db_fc_t1_pct")
                     t1r_ref = refs.get("db_fc_t1_ring")
@@ -1576,16 +1626,24 @@ def main(page: ft.Page):
                     if t1p_ref and t1p_ref.current:
                         t1p_ref.current.value = f"{t1_pct:.0f}%"
                     if t1r_ref and t1r_ref.current:
-                        t1r_ref.current.value = max(0.0, min(1.0, t1_pct / 100.0))
-                        t1r_ref.current.color = tank_col(t1_pct)
+                        t1r_ref.current.controls = [
+                            draw_ring_meter(
+                                max(0.0, min(1.0, t1_pct / 100.0)),
+                                size=116, stroke=12, color=tank_col(t1_pct)
+                            )
+                        ]
                     if t1v_ref and t1v_ref.current:
                         t1v_ref.current.value = f"{dash_state['h2_t1_remaining_kg']:.1f} / {dash_state['h2_t1_capacity_kg']:.0f} kg"
 
                     if t2p_ref and t2p_ref.current:
                         t2p_ref.current.value = f"{t2_pct:.0f}%"
                     if t2r_ref and t2r_ref.current:
-                        t2r_ref.current.value = max(0.0, min(1.0, t2_pct / 100.0))
-                        t2r_ref.current.color = tank_col(t2_pct)
+                        t2r_ref.current.controls = [
+                            draw_ring_meter(
+                                max(0.0, min(1.0, t2_pct / 100.0)),
+                                size=116, stroke=12, color=tank_col(t2_pct)
+                            )
+                        ]
                     if t2v_ref and t2v_ref.current:
                         t2v_ref.current.value = f"{dash_state['h2_t2_remaining_kg']:.1f} / {dash_state['h2_t2_capacity_kg']:.0f} kg"
 
