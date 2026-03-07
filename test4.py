@@ -15,7 +15,8 @@ Run:  python hmi_dashboard.py
 
 import flet as ft
 import flet.canvas as cv
-import random, time, threading, math, collections
+import asyncio
+import random, math, collections
 from datetime import datetime, timedelta
 
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -125,6 +126,34 @@ def _gen_alarm_seed():
         })
 
 _gen_alarm_seed()
+
+
+def dashboard_metrics():
+    temps = [SENSORS["temp_1"].value, SENSORS["temp_2"].value, SENSORS["temp_3"].value]
+    pressures = [
+        SENSORS["pressure"].value,
+        SENSORS["pressure_2"].value,
+        SENSORS["pressure_3"].value,
+        SENSORS["pressure_4"].value,
+    ]
+    total_flow = SENSORS["flow_in"].value + SENSORS["flow_out"].value + SENSORS["flow_3"].value
+    return {
+        "avg_temp": sum(temps) / len(temps),
+        "avg_pressure": sum(pressures) / len(pressures),
+        "total_flow": total_flow,
+        "h2": SENSORS["h2"].value,
+        "o2": SENSORS["oxygen"].value,
+    }
+
+
+_m0 = dashboard_metrics()
+DASH_HIST = {
+    "avg_temp": collections.deque([_m0["avg_temp"]] * HISTORY_LEN, maxlen=HISTORY_LEN),
+    "avg_pressure": collections.deque([_m0["avg_pressure"]] * HISTORY_LEN, maxlen=HISTORY_LEN),
+    "total_flow": collections.deque([_m0["total_flow"]] * HISTORY_LEN, maxlen=HISTORY_LEN),
+    "h2": collections.deque([_m0["h2"]] * HISTORY_LEN, maxlen=HISTORY_LEN),
+    "o2": collections.deque([_m0["o2"]] * HISTORY_LEN, maxlen=HISTORY_LEN),
+}
 
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  DRAWING HELPERS  (canvas-based, no external libs)
@@ -520,20 +549,126 @@ def build_sensor_panel(refs: dict):
 
 
 def build_dashboard(refs: dict):
+    def status_chip(ref_prefix, label, default_text="RUNNING", default_color=C["green"]):
+        txt_ref = ft.Ref[ft.Text]()
+        dot_ref = ft.Ref[ft.Container]()
+        refs[f"db_st_{ref_prefix}_txt"] = txt_ref
+        refs[f"db_st_{ref_prefix}_dot"] = dot_ref
+        return ft.Row([
+            ft.Text(label, color=C["gray"], size=11, width=170),
+            ft.Container(width=8, height=8, border_radius=4,
+                         bgcolor=default_color, ref=dot_ref),
+            ft.Text(default_text, color=default_color, size=11,
+                    weight=ft.FontWeight.W_700, ref=txt_ref),
+        ], spacing=6)
+
+    status_card = card(ft.Column([
+        hdr("SETTINGS_SUGGEST", "System Status Overview"),
+        ft.Container(height=8),
+        status_chip("sys", "System State"),
+        status_chip("h2", "Hydrogen Production"),
+        status_chip("cool", "Cooling System"),
+        status_chip("safe", "Safety Status"),
+    ]), padding=12)
+
+    def kpi_card(metric_key, title, unit, color):
+        v_ref = ft.Ref[ft.Text]()
+        st_ref = ft.Ref[ft.Container]()
+        sp_ref = ft.Ref[ft.Row]()
+        refs[f"db_kpi_{metric_key}_val"] = v_ref
+        refs[f"db_kpi_{metric_key}_st"] = st_ref
+        refs[f"db_kpi_{metric_key}_sp"] = sp_ref
+        return card(ft.Column([
+            ft.Row([
+                ft.Text(title, color=C["gray"], size=11, expand=True),
+                ft.Container(width=8, height=8, border_radius=4, ref=st_ref,
+                             bgcolor=color),
+            ], spacing=6),
+            ft.Container(height=6),
+            ft.Row([
+                ft.Text("-", ref=v_ref, color=C["white"], size=24,
+                        weight=ft.FontWeight.BOLD),
+                ft.Text(unit, color=C["gray"], size=11),
+            ], vertical_alignment=ft.CrossAxisAlignment.END, spacing=4),
+            ft.Container(height=8),
+            ft.Row([draw_spark(DASH_HIST[metric_key], w=150, h=36, color=color)],
+                   ref=sp_ref),
+        ], spacing=0), expand=True)
+
+    kpi_row_1 = ft.Row([
+        kpi_card("avg_temp", "Average Temperature", "°C", C["red"]),
+        kpi_card("avg_pressure", "Average Pressure", "bar", C["blue"]),
+        kpi_card("total_flow", "Total Flow Rate", "L/m", C["teal"]),
+    ], spacing=12, expand=False)
+
+    kpi_row_2 = ft.Row([
+        kpi_card("h2", "Hydrogen (H2)", "%", C["amber"]),
+        kpi_card("o2", "Oxygen (O2)", "%", C["green"]),
+    ], spacing=12, expand=False)
+
+    trend_ref = ft.Ref[ft.Row]()
+    refs["db_trend_row"] = trend_ref
+    trend_card = card(ft.Column([
+        hdr("SHOW_CHART", "System Trends", f"last {HISTORY_LEN}s"),
+        ft.Container(height=8),
+        ft.Row([
+            ft.Container(width=10, height=3, bgcolor=C["red"]),
+            ft.Text("Temperature", color=C["gray"], size=11),
+            ft.Container(width=10),
+            ft.Container(width=10, height=3, bgcolor=C["blue"]),
+            ft.Text("Pressure x10", color=C["gray"], size=11),
+            ft.Container(width=10),
+            ft.Container(width=10, height=3, bgcolor=C["teal"]),
+            ft.Text("Flow /4", color=C["gray"], size=11),
+        ], spacing=4),
+        ft.Container(height=10),
+        ft.Row([
+            draw_line_chart([
+                (DASH_HIST["avg_temp"], C["red"]),
+                (collections.deque([v * 10 for v in DASH_HIST["avg_pressure"]],
+                                   maxlen=HISTORY_LEN), C["blue"]),
+                (collections.deque([v / 4 for v in DASH_HIST["total_flow"]],
+                                   maxlen=HISTORY_LEN), C["teal"]),
+            ], w=560, h=180)
+        ], ref=trend_ref, alignment=ft.MainAxisAlignment.CENTER),
+    ]), expand=True)
+
+    alert_col_ref = ft.Ref[ft.Column]()
+    refs["db_alert_col"] = alert_col_ref
+    alerts_card = card(ft.Column([
+        hdr("WARNING_AMBER", "Alerts / Warnings"),
+        ft.Container(height=8),
+        ft.Column([], ref=alert_col_ref, spacing=6),
+    ]), expand=True)
+
+    rt_ref = ft.Ref[ft.Text]()
+    prod_ref = ft.Ref[ft.Text]()
+    eff_ref = ft.Ref[ft.Text]()
+    refs["db_sum_runtime"] = rt_ref
+    refs["db_sum_prod"] = prod_ref
+    refs["db_sum_eff"] = eff_ref
+
+    summary_card = card(ft.Column([
+        hdr("INFO", "System Summary"),
+        ft.Container(height=10),
+        value_row("System Runtime", rt_ref, "", color=C["teal"], val_size=18),
+        ft.Container(height=8),
+        value_row("Total Simulated H2 Production", prod_ref, "kg", color=C["amber"], val_size=18),
+        ft.Container(height=8),
+        value_row("Average Efficiency", eff_ref, "%", color=C["green"], val_size=18),
+    ]), expand=True)
+
     return ft.Column([
-        card(ft.Column([
-            hdr("DASHBOARD", "Overview"),
-            ft.Container(height=8),
-            ft.Text(
-                "Primary monitoring widgets were moved to the Sensors section.",
-                color=C["gray"], size=12
-            ),
-            ft.Container(height=8),
-            ft.Text(
-                "Open Sensors to view the full live card layout with mini trends.",
-                color=C["white"], size=12
-            ),
-        ]), padding=16),
+        status_card,
+        ft.Container(height=12),
+        kpi_row_1,
+        ft.Container(height=12),
+        kpi_row_2,
+        ft.Container(height=12),
+        ft.Row([trend_card, alerts_card], spacing=12,
+               vertical_alignment=ft.CrossAxisAlignment.START),
+        ft.Container(height=12),
+        summary_card,
     ], spacing=0, expand=True)
 
 
@@ -885,10 +1020,14 @@ def main(page: ft.Page):
     #  SIMULATION + LIVE-UPDATE THREAD
     # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     uptime_start = datetime.now()
+    dash_state = {
+        "total_h2_kg": 0.0,
+        "eff_target": 84.0,
+        "eff": 84.0,
+    }
 
-    def simulate():
+    async def simulate():
         while True:
-            time.sleep(1.5)
             try:
                 # Tick all sensors
                 for s in SENSORS.values():
@@ -907,6 +1046,20 @@ def main(page: ft.Page):
                 fault_count = sum(
                     1 for s in SENSORS.values() if s.status != "OK"
                 )
+                dm = dashboard_metrics()
+                DASH_HIST["avg_temp"].append(dm["avg_temp"])
+                DASH_HIST["avg_pressure"].append(dm["avg_pressure"])
+                DASH_HIST["total_flow"].append(dm["total_flow"])
+                DASH_HIST["h2"].append(dm["h2"])
+                DASH_HIST["o2"].append(dm["o2"])
+
+                prod_rate_kg_h = max(20.0, min(260.0, dm["total_flow"] * dm["h2"] * 0.35))
+                dash_state["total_h2_kg"] += (prod_rate_kg_h / 3600.0) * 1.5
+                load_penalty = min(10.0, fault_count * 3.0)
+                dash_state["eff_target"] += random.uniform(-0.4, 0.4)
+                dash_state["eff_target"] = max(74.0, min(93.0, dash_state["eff_target"] - load_penalty * 0.05))
+                dash_state["eff"] += (dash_state["eff_target"] - dash_state["eff"]) * 0.18 + random.uniform(-0.2, 0.2)
+                dash_state["eff"] = max(68.0, min(95.0, dash_state["eff"]))
 
                 # â”€â”€ Clock & alarm badge (always visible) â”€â”€â”€â”€â”€â”€
                 clock_ref.current.value       = datetime.now().strftime("%H:%M:%S  %d %b %Y")
@@ -914,8 +1067,109 @@ def main(page: ft.Page):
 
                 idx = current_page["idx"]
 
+                # â”€â”€ PAGE 0: Dashboard overview â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                if idx == 0:
+                    if dm["avg_temp"] > 125 or dm["avg_pressure"] > 11 or dm["h2"] > 2.8:
+                        system_state, system_color = "WARNING", C["amber"]
+                    elif fault_count > 2:
+                        system_state, system_color = "FAULT", C["red"]
+                    else:
+                        system_state, system_color = "RUNNING", C["green"]
+
+                    h2_state = ("UNSTABLE", C["amber"]) if dm["h2"] > 2.8 else ("ACTIVE", C["green"])
+                    cool_state = ("HOT", C["amber"]) if dm["avg_temp"] > 110 else ("NORMAL", C["green"])
+                    safe_state = ("ATTENTION", C["amber"]) if fault_count > 0 else ("SAFE", C["green"])
+
+                    status_map = {
+                        "sys": (system_state, system_color),
+                        "h2": h2_state,
+                        "cool": cool_state,
+                        "safe": safe_state,
+                    }
+                    for key, (txt, col) in status_map.items():
+                        t_ref = refs.get(f"db_st_{key}_txt")
+                        d_ref = refs.get(f"db_st_{key}_dot")
+                        if t_ref and t_ref.current:
+                            t_ref.current.value = txt
+                            t_ref.current.color = col
+                        if d_ref and d_ref.current:
+                            d_ref.current.bgcolor = col
+
+                    kpi_spec = {
+                        "avg_temp": (dm["avg_temp"], 1, C["red"]),
+                        "avg_pressure": (dm["avg_pressure"], 2, C["blue"]),
+                        "total_flow": (dm["total_flow"], 0, C["teal"]),
+                        "h2": (dm["h2"], 2, C["amber"]),
+                        "o2": (dm["o2"], 2, C["green"]),
+                    }
+                    for key, (val, decimals, col) in kpi_spec.items():
+                        v_ref = refs.get(f"db_kpi_{key}_val")
+                        s_ref = refs.get(f"db_kpi_{key}_st")
+                        p_ref = refs.get(f"db_kpi_{key}_sp")
+                        if v_ref and v_ref.current:
+                            v_ref.current.value = f"{val:.{decimals}f}"
+                        if s_ref and s_ref.current:
+                            metric_warn = (
+                                (key == "avg_temp" and val > 125) or
+                                (key == "avg_pressure" and val > 11) or
+                                (key == "total_flow" and val < 420) or
+                                (key == "h2" and val > 2.8) or
+                                (key == "o2" and val < 19.2)
+                            )
+                            s_ref.current.bgcolor = C["amber"] if metric_warn else col
+                        if p_ref and p_ref.current:
+                            p_ref.current.controls = [draw_spark(DASH_HIST[key], w=150, h=36, color=col)]
+
+                    tr_ref = refs.get("db_trend_row")
+                    if tr_ref and tr_ref.current:
+                        tr_ref.current.controls = [
+                            draw_line_chart([
+                                (DASH_HIST["avg_temp"], C["red"]),
+                                (collections.deque([v * 10 for v in DASH_HIST["avg_pressure"]],
+                                                   maxlen=HISTORY_LEN), C["blue"]),
+                                (collections.deque([v / 4 for v in DASH_HIST["total_flow"]],
+                                                   maxlen=HISTORY_LEN), C["teal"]),
+                            ], w=560, h=180)
+                        ]
+
+                    alerts = []
+                    if dm["avg_pressure"] > 11:
+                        alerts.append(("FAULT", "High Pressure detected"))
+                    if dm["avg_temp"] > 125:
+                        alerts.append(("WARN", "High Temperature trend"))
+                    if dm["h2"] > 2.8:
+                        alerts.append(("WARN", "High H2 concentration"))
+                    if dm["total_flow"] < 420:
+                        alerts.append(("WARN", "Low Flow rate"))
+                    if not alerts:
+                        alerts.append(("OK", "No active process alarms"))
+
+                    a_ref = refs.get("db_alert_col")
+                    if a_ref and a_ref.current:
+                        rows = []
+                        for lvl, msg in alerts[:6]:
+                            col = STATUS_COLOR.get(lvl, C["green"])
+                            rows.append(ft.Row([
+                                ft.Container(width=3, height=24, bgcolor=col, border_radius=2),
+                                ft.Container(width=8),
+                                badge(lvl, col),
+                                ft.Container(width=8),
+                                ft.Text(msg, color=C["white"], size=11, expand=True),
+                            ], spacing=0))
+                        a_ref.current.controls = rows
+
+                    r_ref = refs.get("db_sum_runtime")
+                    p_ref = refs.get("db_sum_prod")
+                    e_ref = refs.get("db_sum_eff")
+                    if r_ref and r_ref.current:
+                        r_ref.current.value = str(datetime.now() - uptime_start).split(".")[0]
+                    if p_ref and p_ref.current:
+                        p_ref.current.value = f"{dash_state['total_h2_kg']:.1f}"
+                    if e_ref and e_ref.current:
+                        e_ref.current.value = f"{dash_state['eff']:.1f}"
+
                 # â”€â”€ PAGE 1: Sensors (full monitoring panel) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                if idx == 1:
+                elif idx == 1:
                     for key in ["temp_1", "pressure", "flow_in", "power"]:
                         s = SENSORS[key]
                         vr = refs.get(f"kpi_{key}_val")
@@ -1043,9 +1297,10 @@ def main(page: ft.Page):
 
             except Exception as ex:
                 print(f"[SIM] {ex}")
-                break
+                continue
+            await asyncio.sleep(1.5)
 
-    threading.Thread(target=simulate, daemon=True).start()
+    page.run_task(simulate)
 
 
 ft.run(main)
