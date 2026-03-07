@@ -453,7 +453,7 @@ def draw_bar_chart(series: list[tuple[str, float, str]],
     return cv.Canvas(shapes=shapes, width=w, height=h)
 
 
-def draw_line_chart(histories: list[tuple, str], w=500, h=160):
+def draw_line_chart_canvas(histories: list[tuple, str], w=500, h=160):
     """histories = [(deque_of_values, color), ...]"""
     shapes = []
     # grid lines
@@ -488,6 +488,44 @@ def draw_line_chart(histories: list[tuple, str], w=500, h=160):
     return cv.Canvas(shapes=shapes, width=w, height=h)
 
 
+def axis_ticks_from_values(values: list[float]) -> tuple[str, str, str]:
+    if not values:
+        return "-", "-", "-"
+    lo = min(values)
+    hi = max(values)
+    mid = (lo + hi) / 2.0
+    return format_axis_value(hi), format_axis_value(mid), format_axis_value(lo)
+
+
+def draw_line_chart(histories: list[tuple, str], w=500, h=160, show_y_axis=True):
+    """histories = [(deque_of_values, color), ...]"""
+    if not show_y_axis:
+        return draw_line_chart_canvas(histories, w=w, h=h)
+
+    y_axis_w = 40
+    gap = 8
+    chart_w = max(60, w - y_axis_w - gap)
+    all_vals = []
+    for history, _ in histories:
+        all_vals.extend(list(history))
+    top, mid, bot = axis_ticks_from_values(all_vals)
+
+    return ft.Row([
+        ft.Column([
+            ft.Text(top, color=C["gray"], size=9, text_align=ft.TextAlign.RIGHT),
+            ft.Container(expand=True),
+            ft.Text(mid, color=C["gray"], size=9, text_align=ft.TextAlign.RIGHT),
+            ft.Container(expand=True),
+            ft.Text(bot, color=C["gray"], size=9, text_align=ft.TextAlign.RIGHT),
+        ], width=y_axis_w, height=h,
+           horizontal_alignment=ft.CrossAxisAlignment.END,
+           alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        ft.Container(width=gap),
+        draw_line_chart_canvas(histories, w=chart_w, h=h),
+    ], spacing=0, alignment=ft.MainAxisAlignment.CENTER,
+       vertical_alignment=ft.CrossAxisAlignment.START)
+
+
 def format_axis_value(v: float) -> str:
     if abs(v) >= 100:
         return f"{v:.0f}"
@@ -497,13 +535,7 @@ def format_axis_value(v: float) -> str:
 
 
 def axis_ticks_from_history(history) -> tuple[str, str, str]:
-    vals = list(history)
-    if not vals:
-        return "-", "-", "-"
-    lo = min(vals)
-    hi = max(vals)
-    mid = (lo + hi) / 2.0
-    return format_axis_value(hi), format_axis_value(mid), format_axis_value(lo)
+    return axis_ticks_from_values(list(history))
 
 
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -1055,14 +1087,8 @@ def build_dashboard(refs: dict):
     def trend_metric_card(key, title, unit, color, y_label):
         val_ref = ft.Ref[ft.Text]()
         plot_ref = ft.Ref[ft.Row]()
-        y_top_ref = ft.Ref[ft.Text]()
-        y_mid_ref = ft.Ref[ft.Text]()
-        y_bot_ref = ft.Ref[ft.Text]()
         refs[f"db_tr_{key}_val"] = val_ref
         refs[f"db_tr_{key}_plot"] = plot_ref
-        refs[f"db_tr_{key}_y_top"] = y_top_ref
-        refs[f"db_tr_{key}_y_mid"] = y_mid_ref
-        refs[f"db_tr_{key}_y_bot"] = y_bot_ref
         return card(ft.Column([
             hdr("SHOW_CHART", title, f"last {HISTORY_LEN}s"),
             ft.Container(height=8),
@@ -1079,16 +1105,6 @@ def build_dashboard(refs: dict):
             ]),
             ft.Container(height=6),
             ft.Row([
-                ft.Column([
-                    ft.Text("-", ref=y_top_ref, color=C["gray"], size=9, text_align=ft.TextAlign.RIGHT),
-                    ft.Container(expand=True),
-                    ft.Text("-", ref=y_mid_ref, color=C["gray"], size=9, text_align=ft.TextAlign.RIGHT),
-                    ft.Container(expand=True),
-                    ft.Text("-", ref=y_bot_ref, color=C["gray"], size=9, text_align=ft.TextAlign.RIGHT),
-                ], width=38, height=170,
-                   horizontal_alignment=ft.CrossAxisAlignment.END,
-                   alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Container(width=8),
                 ft.Row([
                     draw_line_chart([(DASH_HIST[key], color)], w=280, h=170)
                 ], ref=plot_ref, alignment=ft.MainAxisAlignment.CENTER),
@@ -1739,19 +1755,10 @@ def main(page: ft.Page):
                     # Fuel-cell trend monitoring (separate metric cards)
                     tr_p_val_ref = refs.get("db_tr_power_kw_val")
                     tr_p_plot_ref = refs.get("db_tr_power_kw_plot")
-                    tr_p_y_top_ref = refs.get("db_tr_power_kw_y_top")
-                    tr_p_y_mid_ref = refs.get("db_tr_power_kw_y_mid")
-                    tr_p_y_bot_ref = refs.get("db_tr_power_kw_y_bot")
                     tr_h2_val_ref = refs.get("db_tr_h2_rate_val")
                     tr_h2_plot_ref = refs.get("db_tr_h2_rate_plot")
-                    tr_h2_y_top_ref = refs.get("db_tr_h2_rate_y_top")
-                    tr_h2_y_mid_ref = refs.get("db_tr_h2_rate_y_mid")
-                    tr_h2_y_bot_ref = refs.get("db_tr_h2_rate_y_bot")
                     tr_e_val_ref = refs.get("db_tr_efficiency_val")
                     tr_e_plot_ref = refs.get("db_tr_efficiency_plot")
-                    tr_e_y_top_ref = refs.get("db_tr_efficiency_y_top")
-                    tr_e_y_mid_ref = refs.get("db_tr_efficiency_y_mid")
-                    tr_e_y_bot_ref = refs.get("db_tr_efficiency_y_bot")
 
                     if tr_p_val_ref and tr_p_val_ref.current:
                         tr_p_val_ref.current.value = f"{power_kw:.1f}"
@@ -1759,13 +1766,6 @@ def main(page: ft.Page):
                         tr_p_plot_ref.current.controls = [
                             draw_line_chart([(DASH_HIST["power_kw"], C["teal"])], w=280, h=170)
                         ]
-                    p_top, p_mid, p_bot = axis_ticks_from_history(DASH_HIST["power_kw"])
-                    if tr_p_y_top_ref and tr_p_y_top_ref.current:
-                        tr_p_y_top_ref.current.value = p_top
-                    if tr_p_y_mid_ref and tr_p_y_mid_ref.current:
-                        tr_p_y_mid_ref.current.value = p_mid
-                    if tr_p_y_bot_ref and tr_p_y_bot_ref.current:
-                        tr_p_y_bot_ref.current.value = p_bot
 
                     if tr_h2_val_ref and tr_h2_val_ref.current:
                         tr_h2_val_ref.current.value = f"{h2_rate_kg_h:.2f}"
@@ -1773,13 +1773,6 @@ def main(page: ft.Page):
                         tr_h2_plot_ref.current.controls = [
                             draw_line_chart([(DASH_HIST["h2_rate"], C["amber"])], w=280, h=170)
                         ]
-                    h2_top, h2_mid, h2_bot = axis_ticks_from_history(DASH_HIST["h2_rate"])
-                    if tr_h2_y_top_ref and tr_h2_y_top_ref.current:
-                        tr_h2_y_top_ref.current.value = h2_top
-                    if tr_h2_y_mid_ref and tr_h2_y_mid_ref.current:
-                        tr_h2_y_mid_ref.current.value = h2_mid
-                    if tr_h2_y_bot_ref and tr_h2_y_bot_ref.current:
-                        tr_h2_y_bot_ref.current.value = h2_bot
 
                     if tr_e_val_ref and tr_e_val_ref.current:
                         tr_e_val_ref.current.value = f"{dash_state['elec_eff']:.1f}"
@@ -1787,13 +1780,6 @@ def main(page: ft.Page):
                         tr_e_plot_ref.current.controls = [
                             draw_line_chart([(DASH_HIST["efficiency"], C["green"])], w=280, h=170)
                         ]
-                    e_top, e_mid, e_bot = axis_ticks_from_history(DASH_HIST["efficiency"])
-                    if tr_e_y_top_ref and tr_e_y_top_ref.current:
-                        tr_e_y_top_ref.current.value = e_top
-                    if tr_e_y_mid_ref and tr_e_y_mid_ref.current:
-                        tr_e_y_mid_ref.current.value = e_mid
-                    if tr_e_y_bot_ref and tr_e_y_bot_ref.current:
-                        tr_e_y_bot_ref.current.value = e_bot
 
                 # â”€â”€ PAGE 1: Sensors (full monitoring panel) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 elif idx == 1:
