@@ -1413,6 +1413,136 @@ def build_alarm_history(refs: dict):
     ], spacing=0, expand=True)
 
 
+def build_network_settings(refs: dict, on_apply):
+    media_ref = ft.Ref[ft.Dropdown]()
+    ssid_ref = ft.Ref[ft.TextField]()
+    pass_ref = ft.Ref[ft.TextField]()
+    dhcp_ref = ft.Ref[ft.Switch]()
+    static_ip_ref = ft.Ref[ft.TextField]()
+    status_dot_ref = ft.Ref[ft.Container]()
+    status_txt_ref = ft.Ref[ft.Text]()
+    ip_txt_ref = ft.Ref[ft.Text]()
+    sig_bar_ref = ft.Ref[ft.ProgressBar]()
+    sig_txt_ref = ft.Ref[ft.Text]()
+    apply_msg_ref = ft.Ref[ft.Text]()
+
+    refs["net_media"] = media_ref
+    refs["net_ssid"] = ssid_ref
+    refs["net_pass"] = pass_ref
+    refs["net_dhcp"] = dhcp_ref
+    refs["net_static_ip"] = static_ip_ref
+    refs["net_status_dot"] = status_dot_ref
+    refs["net_status_txt"] = status_txt_ref
+    refs["net_ip_txt"] = ip_txt_ref
+    refs["net_sig_bar"] = sig_bar_ref
+    refs["net_sig_txt"] = sig_txt_ref
+    refs["net_apply_msg"] = apply_msg_ref
+
+    def on_dhcp_change(_):
+        if static_ip_ref.current and dhcp_ref.current:
+            static_ip_ref.current.disabled = bool(dhcp_ref.current.value)
+            static_ip_ref.current.opacity = 0.55 if static_ip_ref.current.disabled else 1.0
+            static_ip_ref.current.update()
+
+    status_card = card(ft.Column([
+        hdr("ROUTER", "Connection Status", "IoT uplink state"),
+        ft.Container(height=10),
+        ft.Row([
+            ft.Container(width=10, height=10, border_radius=5, ref=status_dot_ref, bgcolor=C["gray"]),
+            ft.Text("Disconnected", ref=status_txt_ref, color=C["gray"], size=13, weight=ft.FontWeight.W_700),
+        ], spacing=8),
+        ft.Container(height=8),
+        ft.Text("IP Address", color=C["gray"], size=11),
+        ft.Text("-", ref=ip_txt_ref, color=C["white"], size=14, weight=ft.FontWeight.W_600),
+        ft.Container(height=10),
+        ft.Row([
+            ft.Text("Signal / Link Quality", color=C["gray"], size=11),
+            ft.Container(expand=True),
+            ft.Text("0%", ref=sig_txt_ref, color=C["gray"], size=11),
+        ]),
+        ft.ProgressBar(value=0.0, ref=sig_bar_ref, color=C["teal"], bgcolor=C["gray2"], height=7),
+    ]), expand=True)
+
+    config_card = card(ft.Column([
+        hdr("SETTINGS_ETHERNET", "Network Configuration"),
+        ft.Container(height=10),
+        ft.Text("Network Type", color=C["gray"], size=11),
+        ft.Dropdown(
+            ref=media_ref,
+            value="Wi-Fi",
+            options=[ft.dropdown.Option("Wi-Fi"), ft.dropdown.Option("Ethernet")],
+            dense=True,
+            border_color=C["border"],
+            bgcolor=C["card2"],
+            color=C["white"],
+        ),
+        ft.Container(height=8),
+        ft.TextField(
+            ref=ssid_ref,
+            label="SSID / Network Name",
+            value="FuelCell-IoT",
+            border_color=C["border"],
+            bgcolor=C["card2"],
+            color=C["white"],
+            label_style=ft.TextStyle(color=C["gray"]),
+        ),
+        ft.Container(height=8),
+        ft.TextField(
+            ref=pass_ref,
+            label="Password",
+            password=True,
+            can_reveal_password=True,
+            value="",
+            border_color=C["border"],
+            bgcolor=C["card2"],
+            color=C["white"],
+            label_style=ft.TextStyle(color=C["gray"]),
+        ),
+        ft.Container(height=8),
+        ft.Row([
+            ft.Text("DHCP (Dynamic IP)", color=C["gray"], size=11),
+            ft.Container(expand=True),
+            ft.Switch(ref=dhcp_ref, value=True, active_color=C["teal"], on_change=on_dhcp_change),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ft.TextField(
+            ref=static_ip_ref,
+            label="Static IP Address",
+            value="192.168.10.120",
+            disabled=True,
+            opacity=0.55,
+            border_color=C["border"],
+            bgcolor=C["card2"],
+            color=C["white"],
+            label_style=ft.TextStyle(color=C["gray"]),
+        ),
+        ft.Container(height=10),
+        ft.Row([
+            ft.ElevatedButton(
+                "Save / Apply Settings",
+                icon=ft.Icons.SAVE,
+                on_click=on_apply,
+                style=ft.ButtonStyle(
+                    bgcolor=C["teal"],
+                    color=C["bg"],
+                    shape=ft.RoundedRectangleBorder(radius=8),
+                ),
+            ),
+            ft.Container(width=8),
+            ft.Text("", ref=apply_msg_ref, color=C["gray"], size=11),
+        ], wrap=True),
+    ]), expand=True)
+
+    return ft.Column([
+        ft.Row([
+            ft.Icon(ft.Icons.SETTINGS_ETHERNET, color=C["teal"], size=18),
+            ft.Text("Network Settings", color=C["white"], size=15, weight=ft.FontWeight.W_700),
+            ft.Text("IoT Connectivity Configuration", color=C["gray"], size=11),
+        ], spacing=8),
+        ft.Container(height=10),
+        ft.Row([config_card, status_card], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
+    ], spacing=0, expand=True)
+
+
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  MAIN APPLICATION
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -1427,6 +1557,18 @@ def main(page: ft.Page):
     current_page = {"idx": 0}
     selected_sensor = {"key": None}
     emergency_state = {"active": False}
+    network_state = {
+        "media": "Wi-Fi",
+        "ssid": "FuelCell-IoT",
+        "password": "",
+        "dhcp": True,
+        "static_ip": "192.168.10.120",
+        "ip": "-",
+        "status": "Disconnected",
+        "signal": 0.0,
+        "connect_ticks": 0,
+        "apply_msg": "",
+    }
 
     # â”€â”€ Build all pages once (lazy rebuild on nav) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     pages_cache = {}
@@ -1452,10 +1594,52 @@ def main(page: ft.Page):
             return build_sensor_detail(local_refs, selected_sensor["key"], close_sensor_detail)
         return build_sensor_panel(local_refs, on_sensor_click=open_sensor_detail)
 
+    def apply_network_settings(_):
+        media_ref = refs.get("net_media")
+        ssid_ref = refs.get("net_ssid")
+        pass_ref = refs.get("net_pass")
+        dhcp_ref = refs.get("net_dhcp")
+        static_ip_ref = refs.get("net_static_ip")
+
+        media = media_ref.current.value if media_ref and media_ref.current else network_state["media"]
+        ssid = ssid_ref.current.value.strip() if ssid_ref and ssid_ref.current and ssid_ref.current.value else ""
+        password = pass_ref.current.value if pass_ref and pass_ref.current else ""
+        dhcp = bool(dhcp_ref.current.value) if dhcp_ref and dhcp_ref.current else True
+        static_ip = static_ip_ref.current.value.strip() if static_ip_ref and static_ip_ref.current and static_ip_ref.current.value else network_state["static_ip"]
+
+        network_state["media"] = media
+        network_state["ssid"] = ssid
+        network_state["password"] = password
+        network_state["dhcp"] = dhcp
+        network_state["static_ip"] = static_ip
+
+        if media == "Wi-Fi" and not ssid:
+            network_state["status"] = "Disconnected"
+            network_state["connect_ticks"] = 0
+            network_state["signal"] = 0.0
+            network_state["ip"] = "-"
+            network_state["apply_msg"] = "SSID required for Wi-Fi."
+        else:
+            network_state["status"] = "Connecting"
+            network_state["connect_ticks"] = random.randint(2, 4)
+            network_state["signal"] = random.uniform(0.2, 0.45)
+            network_state["ip"] = "-"
+            network_state["apply_msg"] = f"Applying {media} settings..."
+
+        apply_msg_ref = refs.get("net_apply_msg")
+        if apply_msg_ref and apply_msg_ref.current:
+            apply_msg_ref.current.value = network_state["apply_msg"]
+
+        page.snack_bar = ft.SnackBar(ft.Text(network_state["apply_msg"]), open=True, bgcolor=C["card2"])
+        page.update()
+
+    def build_network_page(local_refs: dict):
+        return build_network_settings(local_refs, apply_network_settings)
+
     def get_page(idx):
         if idx not in pages_cache:
             builders = [build_dashboard, build_sensors_page,
-                        build_analytics, build_system, build_alarm_history]
+                        build_analytics, build_system, build_alarm_history, build_network_page]
             pages_cache[idx] = builders[idx](refs)
         return pages_cache[idx]
 
@@ -1576,6 +1760,7 @@ def main(page: ft.Page):
         ("Analytics", "ANALYTICS",    2),
         ("System",    "MEMORY",       3),
         ("Alarms",    "WARNING_AMBER",4),
+        ("Network",   "SETTINGS_ETHERNET", 5),
     ]
 
     nav_col_ref = ft.Ref[ft.Column]()
@@ -1752,6 +1937,34 @@ def main(page: ft.Page):
                     DASH_HIST["efficiency"].append(0.0)
 
                 active_alarm_count = len(ACTIVE_ALARMS)
+
+                # Network connectivity simulation
+                if network_state["status"] == "Connecting":
+                    network_state["connect_ticks"] = max(0, int(network_state["connect_ticks"]) - 1)
+                    network_state["signal"] = max(0.1, min(1.0, float(network_state["signal"]) + random.uniform(0.05, 0.15)))
+                    if network_state["connect_ticks"] <= 0:
+                        if random.random() < 0.88:
+                            network_state["status"] = "Connected"
+                            network_state["signal"] = max(0.35, min(1.0, float(network_state["signal"]) + random.uniform(0.1, 0.25)))
+                            if network_state["dhcp"]:
+                                network_state["ip"] = f"192.168.10.{random.randint(20, 230)}"
+                            else:
+                                network_state["ip"] = network_state["static_ip"] or "192.168.10.120"
+                            network_state["apply_msg"] = f"{network_state['media']} connected"
+                        else:
+                            network_state["status"] = "Disconnected"
+                            network_state["signal"] = 0.0
+                            network_state["ip"] = "-"
+                            network_state["apply_msg"] = "Connection failed"
+                elif network_state["status"] == "Connected":
+                    network_state["signal"] = max(0.3, min(1.0, float(network_state["signal"]) + random.uniform(-0.07, 0.08)))
+                    if random.random() < 0.01:
+                        network_state["status"] = "Disconnected"
+                        network_state["signal"] = 0.0
+                        network_state["ip"] = "-"
+                        network_state["apply_msg"] = "Link dropped"
+                else:
+                    network_state["signal"] = max(0.0, float(network_state["signal"]) - 0.08)
 
                 # â”€â”€ Clock & alarm badge (always visible) â”€â”€â”€â”€â”€â”€
                 clock_ref.current.value       = datetime.now().strftime("%H:%M:%S  %d %b %Y")
@@ -2101,6 +2314,35 @@ def main(page: ft.Page):
                         if not rows:
                             rows.append(ft.Text("No alarm history available.", color=C["gray"], size=12))
                         log_ref.current.controls = rows
+
+                # —— PAGE 5: Network Settings —————————————————————
+                elif idx == 5:
+                    stat_dot_ref = refs.get("net_status_dot")
+                    stat_txt_ref = refs.get("net_status_txt")
+                    ip_ref = refs.get("net_ip_txt")
+                    sig_bar_ref = refs.get("net_sig_bar")
+                    sig_txt_ref = refs.get("net_sig_txt")
+                    apply_msg_ref = refs.get("net_apply_msg")
+
+                    status_color = C["green"] if network_state["status"] == "Connected" else (
+                        C["amber"] if network_state["status"] == "Connecting" else C["red"]
+                    )
+
+                    if stat_dot_ref and stat_dot_ref.current:
+                        stat_dot_ref.current.bgcolor = status_color
+                    if stat_txt_ref and stat_txt_ref.current:
+                        stat_txt_ref.current.value = network_state["status"]
+                        stat_txt_ref.current.color = status_color
+                    if ip_ref and ip_ref.current:
+                        ip_ref.current.value = network_state["ip"]
+                    if sig_bar_ref and sig_bar_ref.current:
+                        sig_bar_ref.current.value = max(0.0, min(1.0, float(network_state["signal"])))
+                        sig_bar_ref.current.color = status_color
+                    if sig_txt_ref and sig_txt_ref.current:
+                        sig_txt_ref.current.value = f"{int(max(0.0, min(1.0, float(network_state['signal']))) * 100)}%"
+                        sig_txt_ref.current.color = status_color
+                    if apply_msg_ref and apply_msg_ref.current:
+                        apply_msg_ref.current.value = network_state["apply_msg"]
 
                 page.update()
 
