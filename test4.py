@@ -339,7 +339,7 @@ def value_row(label, value_ref, unit, color=C["white"], val_size=22):
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 # â”€â”€ PAGE 1: Dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-def build_dashboard(refs: dict):
+def build_sensor_panel(refs: dict):
     """
     Top row: 4 KPI tiles (temp, pressure, flow, power)
     Middle:  big production arc + 2 trend lines
@@ -519,75 +519,27 @@ def build_dashboard(refs: dict):
     ], spacing=0, expand=True)
 
 
+def build_dashboard(refs: dict):
+    return ft.Column([
+        card(ft.Column([
+            hdr("DASHBOARD", "Overview"),
+            ft.Container(height=8),
+            ft.Text(
+                "Primary monitoring widgets were moved to the Sensors section.",
+                color=C["gray"], size=12
+            ),
+            ft.Container(height=8),
+            ft.Text(
+                "Open Sensors to view the full live card layout with mini trends.",
+                color=C["white"], size=12
+            ),
+        ]), padding=16),
+    ], spacing=0, expand=True)
+
+
 # â”€â”€ PAGE 2: Sensors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def build_sensors(refs: dict):
-    """
-    Grid of sensor cards â€” one per sensor.
-    Each shows: arc gauge, current value, status badge, min/max.
-    """
-    tiles = []
-    for key, s in SENSORS.items():
-        arc_ref = ft.Ref[ft.Row]()
-        val_ref = ft.Ref[ft.Text]()
-        st_ref  = ft.Ref[ft.Container]()
-        refs[f"sns_{key}_arc"] = arc_ref
-        refs[f"sns_{key}_val"] = val_ref
-        refs[f"sns_{key}_st"]  = st_ref
-
-        tile = card(ft.Column([
-            ft.Row([
-                ft.Text(s.name, color=C["white"], size=12,
-                        weight=ft.FontWeight.W_600, expand=True),
-                ft.Container(ref=st_ref, width=8, height=8,
-                             border_radius=4,
-                             bgcolor=STATUS_COLOR[s.status]),
-            ]),
-            ft.Container(height=6),
-            ft.Row([draw_arc(s.pct, size=120, stroke=9,
-                             label=s.fmt(0), unit=s.unit,
-                             label_size=22, color=s.color)],
-                   ref=arc_ref,
-                   alignment=ft.MainAxisAlignment.CENTER),
-            ft.Container(height=6),
-            ft.Row([
-                ft.Column([
-                    ft.Text("MIN", color=C["gray"], size=9),
-                    ft.Text(f"{s.low}", color=C["gray"], size=11),
-                ]),
-                ft.Container(expand=True),
-                ft.Column([
-                    ft.Text("CUR", color=C["gray"], size=9),
-                    ft.Text(s.fmt(), ref=val_ref,
-                            color=s.color, size=13,
-                            weight=ft.FontWeight.BOLD),
-                ], horizontal_alignment=ft.CrossAxisAlignment.END),
-                ft.Container(expand=True),
-                ft.Column([
-                    ft.Text("MAX", color=C["gray"], size=9),
-                    ft.Text(f"{s.high}", color=C["gray"], size=11),
-                ], horizontal_alignment=ft.CrossAxisAlignment.END),
-            ]),
-        ], spacing=0), padding=12)
-        tiles.append(ft.Container(content=tile, expand=True))
-
-    # 5-column responsive grid via wrapping Row
-    rows = []
-    per_row = 5
-    for i in range(0, len(tiles), per_row):
-        rows.append(ft.Row(tiles[i:i+per_row], spacing=10,
-                           vertical_alignment=ft.CrossAxisAlignment.STRETCH))
-
-    return ft.Column([
-        ft.Row([
-            ft.Icon(ft.Icons.SENSORS, color=C["teal"], size=18),
-            ft.Text("Live Sensor Readings", color=C["white"], size=16,
-                    weight=ft.FontWeight.W_700),
-            ft.Container(expand=True),
-            ft.Text("Auto-refresh: 1.5s", color=C["gray"], size=11),
-        ], spacing=8),
-        ft.Container(height=12),
-        *rows,
-    ], spacing=10, expand=True)
+    return build_sensor_panel(refs)
 
 
 # â”€â”€ PAGE 3: Analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -962,8 +914,8 @@ def main(page: ft.Page):
 
                 idx = current_page["idx"]
 
-                # â”€â”€ PAGE 0: Dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                if idx == 0:
+                # â”€â”€ PAGE 1: Sensors (full monitoring panel) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                if idx == 1:
                     for key in ["temp_1", "pressure", "flow_in", "power"]:
                         s = SENSORS[key]
                         vr = refs.get(f"kpi_{key}_val")
@@ -1031,23 +983,6 @@ def main(page: ft.Page):
                         acr.current.controls = [
                             alarm_row_small(a) for a in list(ALARMS)[:4]
                         ]
-
-                # â”€â”€ PAGE 1: Sensors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                elif idx == 1:
-                    for key, s in SENSORS.items():
-                        ar2 = refs.get(f"sns_{key}_arc")
-                        vr2 = refs.get(f"sns_{key}_val")
-                        sr2 = refs.get(f"sns_{key}_st")
-                        if ar2 and ar2.current:
-                            ar2.current.controls = [
-                                draw_arc(s.pct, size=120, stroke=9,
-                                         label=s.fmt(0), unit=s.unit,
-                                         label_size=22, color=s.color)
-                            ]
-                        if vr2 and vr2.current:
-                            vr2.current.value = s.fmt()
-                        if sr2 and sr2.current:
-                            sr2.current.bgcolor = STATUS_COLOR[s.status]
 
                 # â”€â”€ PAGE 2: Analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 elif idx == 2:
