@@ -10,7 +10,9 @@ from models import (
 )
 from ui_components import draw_spark, draw_line_chart, draw_arc, badge, draw_ring_meter
 
-def start_simulation(page, refs, current_page, emergency_state, network_state, dash_state, clock_ref, alarm_badge, uptime_start, selected_card):
+SIM_TICK_SEC = 0.01
+
+def start_simulation(page, refs, current_page, emergency_state, network_state, dash_state, clock_ref, alarm_badge, uptime_start, selected_card, content_ref=None):
     detail_hist = {
         "h2_remaining_pct": collections.deque([70.0] * HISTORY_LEN, maxlen=HISTORY_LEN),
         "sys_alarm_events": collections.deque([len(ALARMS)] * HISTORY_LEN, maxlen=HISTORY_LEN),
@@ -203,7 +205,7 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                     current_a = (power_kw * 1000.0) / max(voltage_v, 1.0)
                     dash_state["perf_ratio"] = max(55.0, min(110.0, (power_kw / 120.0) * 100.0))
 
-                    step_hours = 1.5 / 3600.0
+                    step_hours = SIM_TICK_SEC / 3600.0
                     dash_state["energy_kwh"] += power_kw * step_hours
                     h2_used = h2_rate_kg_h * step_hours
                     dash_state["h2_consumed_kg"] += h2_used
@@ -857,12 +859,19 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                             ], spacing=0))
                         dr_ref.current.controls = dev_rows or [ft.Text("No device data available.", color=C["gray"], size=11)]
 
-                page.update()
+                if clock_ref and clock_ref.current:
+                    clock_ref.current.update()
+                if alarm_badge and alarm_badge.current:
+                    alarm_badge.current.update()
+                if content_ref and content_ref.current and content_ref.current.controls:
+                    content_ref.current.controls[0].update()
+                else:
+                    page.update()
 
             except Exception as ex:
                 print(f"[SIM] {ex}")
                 continue
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(SIM_TICK_SEC)
 
     page.run_task(simulate)
 

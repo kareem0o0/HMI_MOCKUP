@@ -74,15 +74,14 @@ def main(page: ft.Page):
     def open_sensor_detail(sensor_key: str):
         selected_sensor["key"] = sensor_key
         pages_cache.pop(1, None)
-        refs.clear()
         if content_ref.current:
             content_ref.current.controls = [get_page(1)]
             page.update()
 
     def close_sensor_detail():
         selected_sensor["key"] = None
+        refs["sd_sensor_key"] = None
         pages_cache.pop(1, None)
-        refs.clear()
         if content_ref.current:
             content_ref.current.controls = [get_page(1)]
             page.update()
@@ -96,8 +95,7 @@ def main(page: ft.Page):
         selected_card["key"] = detail_key
         selected_card["from_idx"] = current_page["idx"]
         current_page["idx"] = 6
-        pages_cache.clear()
-        refs.clear()
+        pages_cache.pop(6, None)
         nav_col_ref.current.controls = make_nav(selected_card["from_idx"])
         content_ref.current.controls = [get_page(6)]
         page.update()
@@ -106,8 +104,9 @@ def main(page: ft.Page):
         back_idx = selected_card["from_idx"]
         selected_card["key"] = None
         current_page["idx"] = back_idx
-        pages_cache.clear()
-        refs.clear()
+        pages_cache.pop(6, None)
+        if back_idx == 1:
+            pages_cache.pop(1, None)
         nav_col_ref.current.controls = make_nav(back_idx)
         content_ref.current.controls = [get_page(back_idx)]
         page.update()
@@ -479,9 +478,10 @@ def main(page: ft.Page):
     def switch_page(idx):
         current_page["idx"] = idx
         selected_sensor["key"] = None
+        refs["sd_sensor_key"] = None
         selected_card["key"] = None
-        pages_cache.clear()          # force rebuild with fresh refs
-        refs.clear()
+        if idx == 1:
+            pages_cache.pop(1, None)
         nav_col_ref.current.controls = make_nav(idx)
         content_ref.current.controls = [get_page(idx)]
         page.update()
@@ -532,7 +532,7 @@ def main(page: ft.Page):
     }
 
     start_simulation(page, refs, current_page, emergency_state, network_state, dash_state,
-                    clock_ref, alarm_badge, uptime_start, selected_card)
+                    clock_ref, alarm_badge, uptime_start, selected_card, content_ref)
 
 
 

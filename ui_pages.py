@@ -790,6 +790,65 @@ def build_card_detail(refs: dict, detail_key: str, on_back):
     refs["cd_eff_pr_row"] = eff_pr_row_ref
 
     meta = DETAIL_META.get(detail_key, ("Card Detail", "", C["teal"], "Detailed drill-down view"))
+    no_overview_keys = {"ana_stats", "sys_devices", "net_config", "net_plc"}
+    show_overview = detail_key not in no_overview_keys
+    show_stats_card = detail_key == "ana_stats"
+    show_devices_card = detail_key == "sys_devices"
+    show_eff_plots = detail_key == "db_eff"
+    show_plot_card = (detail_key not in no_overview_keys) and (detail_key != "db_eff")
+
+    hist_seed_map = {
+        "db_power": DASH_HIST["power_kw"],
+        "db_h2": DASH_HIST["h2_rate"],
+        "db_eff": DASH_HIST["efficiency"],
+        "db_health": DASH_HIST["efficiency"],
+        "db_tanks": collections.deque([70.0] * HISTORY_LEN, maxlen=HISTORY_LEN),
+        "db_tr_power_kw": DASH_HIST["power_kw"],
+        "db_tr_h2_rate": DASH_HIST["h2_rate"],
+        "db_tr_efficiency": DASH_HIST["efficiency"],
+        "net_status": collections.deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN),
+    }
+    init_hist = hist_seed_map.get(detail_key, DASH_HIST["power_kw"])
+    init_vals = list(init_hist)
+    init_last = init_vals[-1] if init_vals else 0.0
+    init_min = min(init_vals) if init_vals else 0.0
+    init_max = max(init_vals) if init_vals else 0.0
+    init_avg = (sum(init_vals) / len(init_vals)) if init_vals else 0.0
+
+    stats_seed_rows = []
+    for s in SENSORS.values():
+        vals = list(s.history)
+        avg = (sum(vals) / len(vals)) if vals else s.value
+        stats_seed_rows.append(ft.Row([
+            ft.Text(s.name, color=C["white"], size=12, width=170),
+            ft.Text(s.fmt(), color=s.color, size=12, width=80, weight=ft.FontWeight.BOLD),
+            ft.Text(f"{min(vals):.2f}" if vals else "-", color=C["gray"], size=12, width=80),
+            ft.Text(f"{max(vals):.2f}" if vals else "-", color=C["gray"], size=12, width=80),
+            ft.Text(f"{avg:.2f}", color=C["gray"], size=12, width=80),
+            badge(s.status, STATUS_COLOR[s.status]),
+        ], spacing=0))
+
+    device_seed = [
+        ("PLC Unit 1", "ONLINE", C["green"]),
+        ("PLC Unit 2", "ONLINE", C["green"]),
+        ("SCADA Server", "ONLINE", C["green"]),
+        ("HMI Terminal 1", "ONLINE", C["green"]),
+        ("HMI Terminal 2", "STANDBY", C["amber"]),
+        ("Sensor Hub A", "ONLINE", C["green"]),
+        ("Sensor Hub B", "FAULT", C["red"]),
+        ("Data Logger", "ONLINE", C["green"]),
+        ("OPC-UA Gateway", "ONLINE", C["green"]),
+        ("Historian DB", "STANDBY", C["amber"]),
+    ]
+    device_seed_rows = []
+    for name, status, col in device_seed:
+        device_seed_rows.append(ft.Row([
+            ft.Container(width=8, height=8, border_radius=4, bgcolor=col),
+            ft.Container(width=8),
+            ft.Text(name, color=C["white"], size=12, expand=True),
+            badge(status, col),
+        ], spacing=0))
+
     return ft.Column([
         ft.Row([
             ft.IconButton(icon=ft.Icons.ARROW_BACK, icon_color=C["gray"], on_click=lambda e: on_back()),
@@ -800,29 +859,29 @@ def build_card_detail(refs: dict, detail_key: str, on_back):
         ft.Container(height=10),
         ft.Container(
             ref=overview_card_ref,
-            visible=True,
+            visible=show_overview,
             content=card(ft.Column([
                 ft.Row([
                     ft.Column([
                         ft.Text("Current Value", color=C["gray"], size=11),
                         ft.Row([
-                            ft.Text("-", ref=value_ref, color=meta[2], size=34, weight=ft.FontWeight.BOLD),
+                            ft.Text(f"{init_last:.2f}", ref=value_ref, color=meta[2], size=34, weight=ft.FontWeight.BOLD),
                             ft.Text(meta[1], ref=unit_ref, color=C["gray"], size=14),
                         ], vertical_alignment=ft.CrossAxisAlignment.END, spacing=6),
                     ]),
                     ft.Container(expand=True),
                     ft.Column([
                         ft.Row([
-                            ft.Container(width=9, height=9, border_radius=5, ref=status_dot_ref, bgcolor=C["gray"]),
-                            ft.Text("UNKNOWN", ref=status_txt_ref, color=C["gray"], size=12, weight=ft.FontWeight.W_700),
+                            ft.Container(width=9, height=9, border_radius=5, ref=status_dot_ref, bgcolor=C["green"]),
+                            ft.Text("OK", ref=status_txt_ref, color=C["green"], size=12, weight=ft.FontWeight.W_700),
                         ], spacing=6),
                         ft.Container(height=8),
                         ft.Text("Minimum", color=C["gray"], size=10),
-                        ft.Text("-", ref=min_ref, color=C["white"], size=12),
+                        ft.Text(f"{init_min:.2f}", ref=min_ref, color=C["white"], size=12),
                         ft.Text("Maximum", color=C["gray"], size=10),
-                        ft.Text("-", ref=max_ref, color=C["white"], size=12),
+                        ft.Text(f"{init_max:.2f}", ref=max_ref, color=C["white"], size=12),
                         ft.Text("Average", color=C["gray"], size=10),
-                        ft.Text("-", ref=avg_ref, color=C["white"], size=12),
+                        ft.Text(f"{init_avg:.2f}", ref=avg_ref, color=C["white"], size=12),
                     ], horizontal_alignment=ft.CrossAxisAlignment.END),
                 ]),
             ]), expand=True),
@@ -843,7 +902,7 @@ def build_card_detail(refs: dict, detail_key: str, on_back):
         ft.Container(height=12),
         ft.Container(
             ref=stats_card_ref,
-            visible=False,
+            visible=show_stats_card,
             content=card(ft.Column([
                 hdr("TABLE_CHART", "Sensor Statistics (Expanded)"),
                 ft.Container(height=8),
@@ -856,38 +915,38 @@ def build_card_detail(refs: dict, detail_key: str, on_back):
                     ft.Text("Status",  color=C["gray"], size=11),
                 ]),
                 divider(),
-                ft.Column([ft.Text("No statistics available.", color=C["gray"], size=11)],
+                ft.Column(stats_seed_rows or [ft.Text("No statistics available.", color=C["gray"], size=11)],
                           ref=stats_rows_ref, spacing=6),
             ]), expand=True),
         ),
         ft.Container(height=12),
         ft.Container(
             ref=devices_card_ref,
-            visible=False,
+            visible=show_devices_card,
             content=card(ft.Column([
                 hdr("DEVELOPER_BOARD", "Device Status (Expanded)"),
                 ft.Container(height=8),
-                ft.Column([ft.Text("No device data available.", color=C["gray"], size=11)],
+                ft.Column(device_seed_rows or [ft.Text("No device data available.", color=C["gray"], size=11)],
                           ref=devices_rows_ref, spacing=8),
             ]), expand=True),
         ),
         ft.Container(height=12),
         ft.Container(
             ref=eff_plots_card_ref,
-            visible=False,
+            visible=show_eff_plots,
             content=card(ft.Column([
                 hdr("AUTO_GRAPH", "Efficiency Metrics Trends"),
                 ft.Container(height=8),
                 ft.Text("Electrical Efficiency", color=C["gray"], size=11),
-                ft.Row([draw_line_chart([(collections.deque([0] * HISTORY_LEN, maxlen=HISTORY_LEN), C["green"])], w=940, h=110)],
+                ft.Row([draw_line_chart([(DASH_HIST["efficiency"], C["green"])], w=940, h=110)],
                        ref=eff_ele_row_ref, alignment=ft.MainAxisAlignment.CENTER),
                 ft.Container(height=8),
                 ft.Text("Conversion Efficiency", color=C["gray"], size=11),
-                ft.Row([draw_line_chart([(collections.deque([0] * HISTORY_LEN, maxlen=HISTORY_LEN), C["teal"])], w=940, h=110)],
+                ft.Row([draw_line_chart([(DASH_HIST["conv_eff"], C["teal"])], w=940, h=110)],
                        ref=eff_conv_row_ref, alignment=ft.MainAxisAlignment.CENTER),
                 ft.Container(height=8),
                 ft.Text("Performance Ratio", color=C["gray"], size=11),
-                ft.Row([draw_line_chart([(collections.deque([0] * HISTORY_LEN, maxlen=HISTORY_LEN), C["blue"])], w=940, h=110)],
+                ft.Row([draw_line_chart([(DASH_HIST["perf_ratio"], C["blue"])], w=940, h=110)],
                        ref=eff_pr_row_ref, alignment=ft.MainAxisAlignment.CENTER),
             ]), expand=True),
         ),
@@ -897,10 +956,10 @@ def build_card_detail(refs: dict, detail_key: str, on_back):
             content=card(ft.Column([
                 hdr("SHOW_CHART", "Historical Trend"),
                 ft.Container(height=8),
-                ft.Row([draw_line_chart([(collections.deque([0] * HISTORY_LEN, maxlen=HISTORY_LEN), meta[2])], w=940, h=280)],
+                ft.Row([draw_line_chart([(init_hist, meta[2])], w=940, h=280)],
                        ref=plot_ref, alignment=ft.MainAxisAlignment.CENTER),
             ]), expand=True),
-            visible=True,
+            visible=show_plot_card,
         ),
         ft.Container(height=12),
         card(ft.Column([
