@@ -115,6 +115,26 @@ python main.py
 
 (If your environment uses `py`, run `py -3 main.py`.)
 
+## Windows Desktop Build
+
+This project is ready to package as a standalone Windows desktop app (no Python needed on client PC).
+
+1. Build using the helper script:
+
+```powershell
+.\build_windows.ps1
+```
+
+2. Output artifacts:
+- `build\desktop\FuelCellHMIDemo\FuelCellHMIDemo.exe` (standalone app folder)
+- `build\FuelCellHMIDemo-win.zip` (ready-to-share zip for client)
+
+You can also build directly with Flet:
+
+```powershell
+.\.venv\Scripts\flet.exe pack .\main.py -D -n FuelCellHMIDemo --distpath .\build\desktop -y
+```
+
 ## Scope
 
 This is currently a mock/simulation interface intended for UI, architecture, and workflow validation.

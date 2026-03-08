@@ -1,0 +1,14 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# Packaging/build outputs
+build/
+dist/
+*.spec
+
+# Local runtime/cache files
+*.log

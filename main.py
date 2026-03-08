@@ -8,6 +8,7 @@ from models import (
     C, SENSORS, _activate_system_alarm, _resolve_system_alarm,
 )
 from credentials import TRIAL_KEY_GROUPS, ADMIN_KEY
+from access_persistence import load_rotation_state, save_rotation_state
 from ui_components import nav_btn
 from ui_pages import (
     build_dashboard, build_sensor_panel, build_sensor_detail,
@@ -45,6 +46,7 @@ def main(page: ft.Page):
             "keys": keys,
             "next_idx": 0,
         })
+    load_rotation_state(trial_groups, ADMIN_KEY)
     network_defaults = {
         "media": "Wi-Fi",
         "ssid": "FuelCell-IoT",
@@ -112,6 +114,7 @@ def main(page: ft.Page):
     def _reset_trial_cycles():
         for grp in trial_groups:
             grp["next_idx"] = 0
+        save_rotation_state(trial_groups, ADMIN_KEY)
 
     def _update_access_banner():
         mode = access_state["mode"]
@@ -183,6 +186,7 @@ def main(page: ft.Page):
         access_state["trial_group_id"] = group["id"]
         access_state["trial_seconds_left"] = float(group["duration_sec"])
         group["next_idx"] = (group["next_idx"] + 1) % len(group["keys"])
+        save_rotation_state(trial_groups, ADMIN_KEY)
         _enter_hmi_home()
         _hide_entry_overlay()
         _update_access_banner()
