@@ -39,6 +39,8 @@ def main(page: ft.Page):
         "status": "Disconnected",
         "signal": 0.0,
         "connect_ticks": 0,
+        "connect_guard_s": 0.0,
+        "force_connect": False,
         "mqtt_host": "broker.hmi.local",
         "mqtt_port": "1883",
         "mqtt_user": "operator",
@@ -72,8 +74,13 @@ def main(page: ft.Page):
     pages_cache = {}
 
     def open_sensor_detail(sensor_key: str):
+        current_page["idx"] = 1
         selected_sensor["key"] = sensor_key
+        selected_card["key"] = None
         pages_cache.pop(1, None)
+        pages_cache.pop(6, None)
+        if nav_col_ref.current:
+            nav_col_ref.current.controls = make_nav(1)
         if content_ref.current:
             content_ref.current.controls = [get_page(1)]
             page.update()
@@ -213,6 +220,8 @@ def main(page: ft.Page):
         if mode == "disconnect":
             network_state["status"] = "Disconnected"
             network_state["connect_ticks"] = 0
+            network_state["connect_guard_s"] = 0.0
+            network_state["force_connect"] = False
             network_state["signal"] = 0.0
             network_state["ip"] = "-"
             network_state["mqtt_status"] = "Disconnected"
@@ -224,6 +233,8 @@ def main(page: ft.Page):
         if network_state["media"] == "Wi-Fi" and not network_state["ssid"]:
             network_state["status"] = "Disconnected"
             network_state["connect_ticks"] = 0
+            network_state["connect_guard_s"] = 0.0
+            network_state["force_connect"] = False
             network_state["signal"] = 0.0
             network_state["ip"] = "-"
             _set_msg("SSID required for Wi-Fi.")
@@ -231,13 +242,18 @@ def main(page: ft.Page):
             return
 
         network_state["status"] = "Connecting"
-        network_state["connect_ticks"] = random.uniform(2.5, 5.0)
+        network_state["connect_ticks"] = random.uniform(2.0, 3.0)
+        network_state["connect_guard_s"] = 0.0
+        network_state["force_connect"] = (mode == "reconnect")
         network_state["signal"] = random.uniform(0.2, 0.45)
         network_state["ip"] = "-"
         network_state["mqtt_status"] = "Connecting"
         network_state["plc_status"] = "Connecting"
         network_state["conn_result"] = "Running..."
-        _set_msg(f"Applying {network_state['media']} settings...")
+        if mode == "reconnect":
+            _set_msg(f"Reconnecting {network_state['media']}...")
+        else:
+            _set_msg(f"Applying {network_state['media']} settings...")
         page.update()
 
     def on_save(_):
@@ -255,6 +271,8 @@ def main(page: ft.Page):
     def on_reset(_):
         network_state["status"] = "Disconnected"
         network_state["connect_ticks"] = 0
+        network_state["connect_guard_s"] = 0.0
+        network_state["force_connect"] = False
         network_state["signal"] = 0.0
         network_state["ip"] = "-"
         network_state["mqtt_status"] = "Disconnected"
@@ -299,7 +317,12 @@ def main(page: ft.Page):
         return build_network_settings(local_refs, actions, on_open_detail=open_card_detail)
 
     def build_card_detail_page(local_refs: dict):
-        return build_card_detail(local_refs, selected_card["key"] or "db_power", close_card_detail)
+        return build_card_detail(
+            local_refs,
+            selected_card["key"] or "db_power",
+            close_card_detail,
+            on_open_sensor=open_sensor_detail,
+        )
 
     def get_page(idx):
         if idx not in pages_cache:

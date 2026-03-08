@@ -1,7 +1,7 @@
 ﻿"""Live simulation/data-update engine."""
 
 import asyncio, random, math, collections
-from datetime import datetime
+from datetime import datetime, timedelta
 import flet as ft
 
 from models import (
@@ -11,6 +11,27 @@ from models import (
 from ui_components import draw_spark, draw_line_chart, draw_arc, badge, draw_ring_meter
 
 SIM_TICK_SEC = 0.01
+RANGE_WINDOWS = {
+    "From Start": None,
+    "Last Year": timedelta(days=365),
+    "Last Month": timedelta(days=30),
+    "Last Week": timedelta(days=7),
+    "Last Day": timedelta(days=1),
+    "Last Hour": timedelta(hours=1),
+    "Last Minute": timedelta(minutes=1),
+}
+DEFAULT_RANGE_LABEL = "Last Minute"
+DETAIL_SERIES_MAP = {
+    "db_power": "power_kw",
+    "db_h2": "h2_rate",
+    "db_eff": "efficiency",
+    "db_tanks": "h2_remaining_pct",
+    "db_tr_power_kw": "power_kw",
+    "db_tr_h2_rate": "h2_rate",
+    "db_tr_efficiency": "efficiency",
+    "net_status": "net_signal",
+}
+MAX_DETAIL_PLOT_POINTS = 420
 
 def start_simulation(page, refs, current_page, emergency_state, network_state, dash_state, clock_ref, alarm_badge, uptime_start, selected_card, content_ref=None):
     detail_hist = {
@@ -28,6 +49,27 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
         "voltage_v": 560.0,
         "current_a": 120.0,
     }
+    long_hist = {
+        "power_kw": [],
+        "h2_rate": [],
+        "efficiency": [],
+        "conv_eff": [],
+        "perf_ratio": [],
+        "h2_remaining_pct": [],
+        "net_signal": [],
+    }
+    sensor_long_hist = {k: [] for k in SENSORS}
+    t0 = datetime.now().timestamp()
+    h2_pct0 = (dash_state["h2_remaining_kg"] / max(dash_state["h2_capacity_kg"], 1e-6)) * 100.0
+    long_hist["power_kw"].append((t0, float(DASH_HIST["power_kw"][-1])))
+    long_hist["h2_rate"].append((t0, float(DASH_HIST["h2_rate"][-1])))
+    long_hist["efficiency"].append((t0, float(dash_state["elec_eff"])))
+    long_hist["conv_eff"].append((t0, float(dash_state["conv_eff"])))
+    long_hist["perf_ratio"].append((t0, float(dash_state["perf_ratio"])))
+    long_hist["h2_remaining_pct"].append((t0, float(h2_pct0)))
+    long_hist["net_signal"].append((t0, float(max(0.0, min(1.0, network_state["signal"]))) * 100.0))
+    for k, s in SENSORS.items():
+        sensor_long_hist[k].append((t0, float(s.value)))
 
     def _stats(vals):
         arr = list(vals)
@@ -49,6 +91,49 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
         noisy_target = target + random.gauss(0.0, noise * math.sqrt(max(dt_s, 1e-4)))
         next_v = _slew(curr, noisy_target, max_rate_s, dt_s)
         return max(lo, min(hi, next_v))
+
+    def _chance_per_second(rate_s: float):
+        # Converts a rate into a tick-safe probability (independent of loop frequency).
+        r = max(0.0, float(rate_s))
+        return random.random() < (1.0 - math.exp(-r * SIM_TICK_SEC))
+
+    def _trim_and_downsample(vals: list[float]):
+        if not vals:
+            return [0.0]
+        if len(vals) <= MAX_DETAIL_PLOT_POINTS:
+            return vals
+        step = max(1, math.ceil(len(vals) / MAX_DETAIL_PLOT_POINTS))
+        reduced = vals[::step]
+        if reduced[-1] != vals[-1]:
+            reduced.append(vals[-1])
+        return reduced
+
+    def _points_for_range(points: list[tuple[float, float]], range_label: str, now_ts: float):
+        if not points:
+            return [0.0]
+        window = RANGE_WINDOWS.get(range_label, RANGE_WINDOWS[DEFAULT_RANGE_LABEL])
+        if window is None:
+            vals = [v for _, v in points]
+            return _trim_and_downsample(vals)
+
+        cutoff = now_ts - window.total_seconds()
+        vals_rev = []
+        for t, v in reversed(points):
+            if t < cutoff:
+                break
+            vals_rev.append(v)
+        vals = list(reversed(vals_rev))
+        if not vals:
+            vals = [points[-1][1]]
+        return _trim_and_downsample(vals)
+
+    def _series_for_range(series_key: str, range_label: str, now_ts: float):
+        points = long_hist.get(series_key, [])
+        return _points_for_range(points, range_label, now_ts)
+
+    def _sensor_series_for_range(sensor_key: str, range_label: str, now_ts: float):
+        points = sensor_long_hist.get(sensor_key, [])
+        return _points_for_range(points, range_label, now_ts)
 
     def _status_from_value(key: str, v: float):
         if key in {"db_power", "db_tr_power_kw"}:
@@ -194,8 +279,9 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                 now = datetime.now()
                 if not emergency_state["active"]:
                     # Tick all sensors
-                    for s in SENSORS.values():
+                    for sk, s in SENSORS.items():
                         s.tick(SIM_TICK_SEC)
+                        sensor_long_hist[sk].append((now.timestamp(), float(s.value)))
 
                     # Alarm lifecycle management (active + resolved + history)
                     for key, s in SENSORS.items():
@@ -275,9 +361,18 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                     DASH_HIST["efficiency"].append(dash_state["elec_eff"])
                     DASH_HIST["conv_eff"].append(dash_state["conv_eff"])
                     DASH_HIST["perf_ratio"].append(dash_state["perf_ratio"])
+                    now_ts = now.timestamp()
+                    long_hist["power_kw"].append((now_ts, float(power_kw)))
+                    long_hist["h2_rate"].append((now_ts, float(h2_rate_kg_h)))
+                    long_hist["efficiency"].append((now_ts, float(dash_state["elec_eff"])))
+                    long_hist["conv_eff"].append((now_ts, float(dash_state["conv_eff"])))
+                    long_hist["perf_ratio"].append((now_ts, float(dash_state["perf_ratio"])))
+                    long_hist["h2_remaining_pct"].append((now_ts, float(h2_remaining_pct)))
                 else:
                     fault_count = sum(1 for s in SENSORS.values() if s.status != "OK")
                     dm = dashboard_metrics()
+                    for sk, s in SENSORS.items():
+                        sensor_long_hist[sk].append((now.timestamp(), float(s.value)))
                     DASH_HIST["avg_temp"].append(dm["avg_temp"])
                     DASH_HIST["avg_pressure"].append(dm["avg_pressure"])
                     DASH_HIST["total_flow"].append(dm["total_flow"])
@@ -301,6 +396,13 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                     DASH_HIST["efficiency"].append(0.0)
                     DASH_HIST["conv_eff"].append(0.0)
                     DASH_HIST["perf_ratio"].append(0.0)
+                    now_ts = now.timestamp()
+                    long_hist["power_kw"].append((now_ts, 0.0))
+                    long_hist["h2_rate"].append((now_ts, 0.0))
+                    long_hist["efficiency"].append((now_ts, 0.0))
+                    long_hist["conv_eff"].append((now_ts, 0.0))
+                    long_hist["perf_ratio"].append((now_ts, 0.0))
+                    long_hist["h2_remaining_pct"].append((now_ts, float(h2_remaining_pct)))
 
                 active_alarm_count = len(ACTIVE_ALARMS)
 
@@ -327,41 +429,47 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                     network_state["latency_ms"] = "-"
                     network_state["packet_loss"] = "-"
                     if network_state["connect_ticks"] <= 0:
-                        if random.random() < 0.88:
+                        should_connect = bool(network_state.get("force_connect")) or (random.random() < 0.88)
+                        if should_connect:
                             network_state["status"] = "Connected"
+                            network_state["connect_guard_s"] = max(6.0, float(network_state.get("connect_guard_s", 0.0)))
                             network_state["signal"] = max(0.35, min(1.0, float(network_state["signal"]) + random.uniform(0.05, 0.12)))
                             if network_state["dhcp"]:
                                 network_state["ip"] = f"192.168.10.{random.randint(20, 230)}"
                             else:
                                 network_state["ip"] = network_state["static_ip"] or "192.168.10.120"
-                            network_state["mqtt_status"] = "Connected" if random.random() < 0.92 else "Degraded"
-                            network_state["plc_status"] = "Online" if random.random() < 0.9 else "Fault"
+                            network_state["mqtt_status"] = "Connected" if random.random() < 0.97 else "Degraded"
+                            network_state["plc_status"] = "Online" if random.random() < 0.97 else "Fault"
                             network_state["latency_ms"] = f"{random.randint(18, 95)} ms"
                             network_state["packet_loss"] = f"{random.uniform(0.0, 1.8):.1f}%"
                             network_state["conn_result"] = "Passed"
                             network_state["apply_msg"] = f"{network_state['media']} connected"
                         else:
                             network_state["status"] = "Disconnected"
+                            network_state["connect_guard_s"] = 0.0
                             network_state["signal"] = 0.0
                             network_state["ip"] = "-"
                             network_state["mqtt_status"] = "Disconnected"
                             network_state["plc_status"] = "Disconnected"
                             network_state["conn_result"] = "Failed"
                             network_state["apply_msg"] = "Connection failed"
+                        network_state["force_connect"] = False
                 elif network_state["status"] == "Connected":
+                    network_state["connect_guard_s"] = max(0.0, float(network_state.get("connect_guard_s", 0.0)) - SIM_TICK_SEC)
                     network_state["signal"] = max(0.3, min(1.0, float(network_state["signal"]) + random.uniform(-0.03, 0.035)))
                     network_state["latency_ms"] = f"{random.randint(18, 95)} ms"
                     network_state["packet_loss"] = f"{random.uniform(0.0, 2.5):.1f}%"
-                    if random.random() < 0.03:
+                    if _chance_per_second(0.02):
                         network_state["mqtt_status"] = "Degraded"
                     else:
                         network_state["mqtt_status"] = "Connected"
-                    if random.random() < 0.03:
+                    if _chance_per_second(0.015):
                         network_state["plc_status"] = "Fault"
                     else:
                         network_state["plc_status"] = "Online"
-                    if random.random() < 0.01:
+                    if network_state["connect_guard_s"] <= 0.0 and _chance_per_second(0.002):
                         network_state["status"] = "Disconnected"
+                        network_state["connect_guard_s"] = 0.0
                         network_state["signal"] = 0.0
                         network_state["ip"] = "-"
                         network_state["mqtt_status"] = "Disconnected"
@@ -369,6 +477,7 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                         network_state["conn_result"] = "Failed"
                         network_state["apply_msg"] = "Link dropped"
                 else:
+                    network_state["connect_guard_s"] = 0.0
                     network_state["signal"] = max(0.0, float(network_state["signal"]) - 0.08)
                     network_state["mqtt_status"] = "Disconnected"
                     network_state["plc_status"] = "Disconnected"
@@ -378,6 +487,7 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                 detail_hist["h2_remaining_pct"].append(h2_remaining_pct)
                 detail_hist["sys_alarm_events"].append(float(len(ALARMS)))
                 detail_hist["net_signal"].append(max(0.0, min(1.0, float(network_state["signal"]))) * 100.0)
+                long_hist["net_signal"].append((now.timestamp(), max(0.0, min(1.0, float(network_state["signal"]))) * 100.0))
                 detail_hist["device_online"].append(runtime_state["device_online"])
                 stats_reliability = max(0.0, 100.0 - (sum(1 for s in SENSORS.values() if s.status != "OK") / max(len(SENSORS), 1)) * 100.0)
                 detail_hist["stats_reliability"].append(stats_reliability)
@@ -559,6 +669,16 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                         avg_ref = refs.get("sd_avg")
                         plot_ref = refs.get("sd_plot")
                         alarm_ref = refs.get("sd_alarm_col")
+                        range_ref = refs.get("sd_range_sel")
+                        selected_sensor_range = DEFAULT_RANGE_LABEL
+                        if range_ref and range_ref.current:
+                            selected_sensor_range = range_ref.current.value or DEFAULT_RANGE_LABEL
+                            if not range_ref.current.value:
+                                range_ref.current.value = DEFAULT_RANGE_LABEL
+                            if selected_sensor_range not in RANGE_WINDOWS:
+                                selected_sensor_range = DEFAULT_RANGE_LABEL
+                                range_ref.current.value = DEFAULT_RANGE_LABEL
+                        sensor_hist_vals = _sensor_series_for_range(detail_key, selected_sensor_range, now.timestamp())
 
                         if v_ref and v_ref.current:
                             v_ref.current.value = s.fmt(2)
@@ -575,7 +695,7 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                             avg_ref.current.value = f"{s.avg_seen:.2f}"
                         if plot_ref and plot_ref.current:
                             plot_ref.current.controls = [
-                                draw_line_chart([(s.history_long, s.color)], w=920, h=260)
+                                draw_line_chart([(sensor_hist_vals, s.color)], w=920, h=260)
                             ]
                         if alarm_ref and alarm_ref.current:
                             rows = []
@@ -799,8 +919,6 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                     show_plot = payload.get("show_plot", True)
                     diag_items = payload.get("diag", [])
                     event_items = payload.get("events", [])
-                    min_v, max_v, avg_v = _stats(history)
-                    status_txt, status_col = _status_from_value(key, value)
 
                     t_ref = refs.get("cd_title")
                     s_ref = refs.get("cd_subtitle")
@@ -824,6 +942,29 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                     ee_ref = refs.get("cd_eff_ele_row")
                     ec_ref = refs.get("cd_eff_conv_row")
                     epr_ref = refs.get("cd_eff_pr_row")
+                    rb_ref = refs.get("cd_range_bar")
+                    rs_ref = refs.get("cd_range_sel")
+                    open_sensor_cb = refs.get("cd_open_sensor_cb")
+
+                    selected_range = DEFAULT_RANGE_LABEL
+                    if rs_ref and rs_ref.current:
+                        selected_range = rs_ref.current.value or DEFAULT_RANGE_LABEL
+                        if not rs_ref.current.value:
+                            rs_ref.current.value = DEFAULT_RANGE_LABEL
+                        if selected_range not in RANGE_WINDOWS:
+                            selected_range = DEFAULT_RANGE_LABEL
+                            rs_ref.current.value = DEFAULT_RANGE_LABEL
+
+                    now_ts = now.timestamp()
+                    detail_series_key = DETAIL_SERIES_MAP.get(key)
+                    ranged_hist = _series_for_range(detail_series_key, selected_range, now_ts) if detail_series_key else list(history)
+                    ee_hist = _series_for_range("efficiency", selected_range, now_ts)
+                    ec_hist = _series_for_range("conv_eff", selected_range, now_ts)
+                    epr_hist = _series_for_range("perf_ratio", selected_range, now_ts)
+
+                    stats_source = ee_hist if key == "db_eff" else ranged_hist
+                    min_v, max_v, avg_v = _stats(stats_source)
+                    status_txt, status_col = _status_from_value(key, value)
 
                     if t_ref and t_ref.current:
                         t_ref.current.value = title
@@ -847,6 +988,8 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                     if st_ref and st_ref.current:
                         st_ref.current.value = status_txt
                         st_ref.current.color = status_col
+                    if rb_ref and rb_ref.current:
+                        rb_ref.current.visible = (key == "db_eff") or (show_plot and detail_series_key is not None)
                     if pc_ref and pc_ref.current:
                         pc_ref.current.visible = show_plot and key != "db_eff"
                     if sc_ref and sc_ref.current:
@@ -857,20 +1000,20 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                         epc_ref.current.visible = (key == "db_eff")
                     if p_ref and p_ref.current:
                         p_ref.current.controls = [
-                            draw_line_chart([(history, color)], w=940, h=280)
+                            draw_line_chart([(ranged_hist, color)], w=940, h=280)
                         ]
                     if key == "db_eff":
                         if ee_ref and ee_ref.current:
                             ee_ref.current.controls = [
-                                draw_line_chart([(DASH_HIST["efficiency"], C["green"])], w=940, h=110)
+                                draw_line_chart([(ee_hist, C["green"])], w=940, h=110)
                             ]
                         if ec_ref and ec_ref.current:
                             ec_ref.current.controls = [
-                                draw_line_chart([(DASH_HIST["conv_eff"], C["teal"])], w=940, h=110)
+                                draw_line_chart([(ec_hist, C["teal"])], w=940, h=110)
                             ]
                         if epr_ref and epr_ref.current:
                             epr_ref.current.controls = [
-                                draw_line_chart([(DASH_HIST["perf_ratio"], C["blue"])], w=940, h=110)
+                                draw_line_chart([(epr_hist, C["blue"])], w=940, h=110)
                             ]
                     if d_ref and d_ref.current:
                         d_ref.current.controls = [
@@ -886,23 +1029,55 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                             for line in event_items
                         ] or [ft.Text("No related events.", color=C["gray"], size=11)]
                     if key == "ana_stats" and sr_ref and sr_ref.current:
-                        stat_rows = []
-                        for s in SENSORS.values():
-                            vals = list(s.history)
-                            avg = (sum(vals) / len(vals)) if vals else s.value
-                            stat_rows.append(ft.Row([
-                                ft.Text(s.name, color=C["white"], size=12, width=170),
-                                ft.Text(s.fmt(), color=s.color, size=12, width=80, weight=ft.FontWeight.BOLD),
-                                ft.Text(f"{min(vals):.2f}" if vals else "-", color=C["gray"], size=12, width=80),
-                                ft.Text(f"{max(vals):.2f}" if vals else "-", color=C["gray"], size=12, width=80),
-                                ft.Text(f"{avg:.2f}", color=C["gray"], size=12, width=80),
-                                badge(s.status, STATUS_COLOR[s.status]),
-                            ], spacing=0))
-                        sr_ref.current.controls = stat_rows or [ft.Text("No statistics available.", color=C["gray"], size=11)]
+                        # Keep controls stable to preserve reliable click interaction.
+                        if not sr_ref.current.controls:
+                            def _sensor_name_link(label: str, sensor_k: str):
+                                if not callable(open_sensor_cb):
+                                    return ft.Text(label, color=C["white"], size=12)
+
+                                bg_ref = ft.Ref[ft.Container]()
+                                txt_ref = ft.Ref[ft.Text]()
+
+                                def _hover(e):
+                                    hovered = e.data == "true"
+                                    if bg_ref.current:
+                                        bg_ref.current.bgcolor = C["teal"] + ("24" if hovered else "00")
+                                        bg_ref.current.update()
+                                    if txt_ref.current:
+                                        txt_ref.current.color = C["teal"] if hovered else C["white"]
+                                        txt_ref.current.update()
+
+                                return ft.Container(
+                                    ref=bg_ref,
+                                    width=168,
+                                    padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                                    border_radius=6,
+                                    bgcolor=C["teal"] + "00",
+                                    alignment=ft.Alignment(-1, 0),
+                                    ink=True,
+                                    on_hover=_hover,
+                                    on_click=lambda e, k=sensor_k, cb=open_sensor_cb: cb(k),
+                                    content=ft.Text(label, ref=txt_ref, color=C["white"], size=12),
+                                )
+
+                            stat_rows = []
+                            for sensor_key, s in SENSORS.items():
+                                vals = list(s.history)
+                                avg = (sum(vals) / len(vals)) if vals else s.value
+                                name_ctl = _sensor_name_link(s.name, sensor_key)
+                                stat_rows.append(ft.Row([
+                                    ft.Container(content=name_ctl, width=170),
+                                    ft.Text(s.fmt(), color=s.color, size=12, width=80, weight=ft.FontWeight.BOLD),
+                                    ft.Text(f"{min(vals):.2f}" if vals else "-", color=C["gray"], size=12, width=80),
+                                    ft.Text(f"{max(vals):.2f}" if vals else "-", color=C["gray"], size=12, width=80),
+                                    ft.Text(f"{avg:.2f}", color=C["gray"], size=12, width=80),
+                                    badge(s.status, STATUS_COLOR[s.status]),
+                                ], spacing=0))
+                            sr_ref.current.controls = stat_rows or [ft.Text("No statistics available.", color=C["gray"], size=11)]
                     if key == "sys_devices" and dr_ref and dr_ref.current:
                         devices = [
-                            ("PLC Unit 1", "ONLINE", C["green"]),
-                            ("PLC Unit 2", "ONLINE", C["green"]),
+                            ("Unit 1", "ONLINE", C["green"]),
+                            ("Unit 2", "ONLINE", C["green"]),
                             ("SCADA Server", "ONLINE", C["green"]),
                             ("HMI Terminal 1", "ONLINE", C["green"]),
                             ("HMI Terminal 2", "STANDBY", C["amber"]),

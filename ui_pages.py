@@ -238,6 +238,7 @@ def build_sensor_detail(refs: dict, sensor_key: str, on_back):
     avg_ref = ft.Ref[ft.Text]()
     plot_ref = ft.Ref[ft.Row]()
     alarm_ref = ft.Ref[ft.Column]()
+    range_sel_ref = ft.Ref[ft.Dropdown]()
 
     refs["sd_sensor_key"] = sensor_key
     refs["sd_val"] = val_ref
@@ -248,6 +249,7 @@ def build_sensor_detail(refs: dict, sensor_key: str, on_back):
     refs["sd_avg"] = avg_ref
     refs["sd_plot"] = plot_ref
     refs["sd_alarm_col"] = alarm_ref
+    refs["sd_range_sel"] = range_sel_ref
 
     def alarm_rows():
         rows = []
@@ -306,7 +308,28 @@ def build_sensor_detail(refs: dict, sensor_key: str, on_back):
                 ], horizontal_alignment=ft.CrossAxisAlignment.END),
             ]),
             ft.Container(height=14),
-            hdr("SHOW_CHART", "Historical Trend"),
+            ft.Row([
+                hdr("SHOW_CHART", "Historical Trend"),
+                ft.Container(expand=True),
+                ft.Dropdown(
+                    ref=range_sel_ref,
+                    value="Last Minute",
+                    width=190,
+                    dense=True,
+                    options=[
+                        ft.dropdown.Option("From Start"),
+                        ft.dropdown.Option("Last Year"),
+                        ft.dropdown.Option("Last Month"),
+                        ft.dropdown.Option("Last Week"),
+                        ft.dropdown.Option("Last Day"),
+                        ft.dropdown.Option("Last Hour"),
+                        ft.dropdown.Option("Last Minute"),
+                    ],
+                    border_color=C["border"],
+                    bgcolor=C["card2"],
+                    color=C["white"],
+                ),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Container(height=8),
             ft.Row([
                 draw_line_chart([(s.history_long, s.color)], w=920, h=260)
@@ -632,8 +655,8 @@ def build_system(refs: dict, on_open_detail=None, on_open_network=None, on_open_
 
     # Device status table
     devices = [
-        ("PLC Unit 1",      "ONLINE",  C["green"]),
-        ("PLC Unit 2",      "ONLINE",  C["green"]),
+        ("Unit 1",      "ONLINE",  C["green"]),
+        ("Unit 2",      "ONLINE",  C["green"]),
         ("SCADA Server",    "ONLINE",  C["green"]),
         ("HMI Terminal 1",  "ONLINE",  C["green"]),
         ("HMI Terminal 2",  "STANDBY", C["amber"]),
@@ -741,7 +764,7 @@ def build_alarm_history(refs: dict):
     ], spacing=0, expand=True)
 
 
-def build_card_detail(refs: dict, detail_key: str, on_back):
+def build_card_detail(refs: dict, detail_key: str, on_back, on_open_sensor=None):
     overview_card_ref = ft.Ref[ft.Container]()
     title_ref = ft.Ref[ft.Text]()
     subtitle_ref = ft.Ref[ft.Text]()
@@ -764,6 +787,8 @@ def build_card_detail(refs: dict, detail_key: str, on_back):
     eff_ele_row_ref = ft.Ref[ft.Row]()
     eff_conv_row_ref = ft.Ref[ft.Row]()
     eff_pr_row_ref = ft.Ref[ft.Row]()
+    range_bar_ref = ft.Ref[ft.Container]()
+    range_sel_ref = ft.Ref[ft.Dropdown]()
 
     refs["cd_key"] = detail_key
     refs["cd_overview_card"] = overview_card_ref
@@ -788,6 +813,9 @@ def build_card_detail(refs: dict, detail_key: str, on_back):
     refs["cd_eff_ele_row"] = eff_ele_row_ref
     refs["cd_eff_conv_row"] = eff_conv_row_ref
     refs["cd_eff_pr_row"] = eff_pr_row_ref
+    refs["cd_range_bar"] = range_bar_ref
+    refs["cd_range_sel"] = range_sel_ref
+    refs["cd_open_sensor_cb"] = on_open_sensor
 
     meta = DETAIL_META.get(detail_key, ("Card Detail", "", C["teal"], "Detailed drill-down view"))
     no_overview_keys = {"ana_stats", "sys_devices", "net_config", "net_plc"}
@@ -815,12 +843,42 @@ def build_card_detail(refs: dict, detail_key: str, on_back):
     init_max = max(init_vals) if init_vals else 0.0
     init_avg = (sum(init_vals) / len(init_vals)) if init_vals else 0.0
 
+    def _sensor_name_link(label: str, sensor_k: str):
+        if not on_open_sensor:
+            return ft.Text(label, color=C["white"], size=12)
+
+        bg_ref = ft.Ref[ft.Container]()
+        txt_ref = ft.Ref[ft.Text]()
+
+        def _hover(e):
+            hovered = e.data == "true"
+            if bg_ref.current:
+                bg_ref.current.bgcolor = C["teal"] + ("24" if hovered else "00")
+                bg_ref.current.update()
+            if txt_ref.current:
+                txt_ref.current.color = C["teal"] if hovered else C["white"]
+                txt_ref.current.update()
+
+        return ft.Container(
+            ref=bg_ref,
+            width=168,
+            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+            border_radius=6,
+            bgcolor=C["teal"] + "00",
+            alignment=ft.Alignment(-1, 0),
+            ink=True,
+            on_hover=_hover,
+            on_click=lambda e, k=sensor_k: on_open_sensor(k),
+            content=ft.Text(label, ref=txt_ref, color=C["white"], size=12),
+        )
+
     stats_seed_rows = []
-    for s in SENSORS.values():
+    for sensor_key, s in SENSORS.items():
         vals = list(s.history)
         avg = (sum(vals) / len(vals)) if vals else s.value
+        name_ctl = _sensor_name_link(s.name, sensor_key)
         stats_seed_rows.append(ft.Row([
-            ft.Text(s.name, color=C["white"], size=12, width=170),
+            ft.Container(content=name_ctl, width=170),
             ft.Text(s.fmt(), color=s.color, size=12, width=80, weight=ft.FontWeight.BOLD),
             ft.Text(f"{min(vals):.2f}" if vals else "-", color=C["gray"], size=12, width=80),
             ft.Text(f"{max(vals):.2f}" if vals else "-", color=C["gray"], size=12, width=80),
@@ -885,6 +943,35 @@ def build_card_detail(refs: dict, detail_key: str, on_back):
                     ], horizontal_alignment=ft.CrossAxisAlignment.END),
                 ]),
             ]), expand=True),
+        ),
+        ft.Container(height=12),
+        ft.Container(
+            ref=range_bar_ref,
+            visible=show_plot_card or show_eff_plots,
+            content=card(ft.Row([
+                ft.Row([
+                    ft.Icon(ft.Icons.SCHEDULE, color=C["teal"], size=14),
+                    ft.Text("Plot Time Range", color=C["gray"], size=11),
+                ], spacing=6),
+                ft.Dropdown(
+                    ref=range_sel_ref,
+                    value="Last Minute",
+                    width=190,
+                    dense=True,
+                    options=[
+                        ft.dropdown.Option("From Start"),
+                        ft.dropdown.Option("Last Year"),
+                        ft.dropdown.Option("Last Month"),
+                        ft.dropdown.Option("Last Week"),
+                        ft.dropdown.Option("Last Day"),
+                        ft.dropdown.Option("Last Hour"),
+                        ft.dropdown.Option("Last Minute"),
+                    ],
+                    border_color=C["border"],
+                    bgcolor=C["card2"],
+                    color=C["white"],
+                ),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), expand=True),
         ),
         ft.Container(height=12),
         ft.Row([
