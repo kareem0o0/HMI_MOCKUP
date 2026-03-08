@@ -20,12 +20,35 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
         "device_online": collections.deque([8.0] * HISTORY_LEN, maxlen=HISTORY_LEN),
         "stats_reliability": collections.deque([100.0] * HISTORY_LEN, maxlen=HISTORY_LEN),
     }
+    runtime_state = {
+        "cpu_load": 46.0,
+        "net_health": 96.0,
+        "storage_pct": 58.0,
+        "device_online": 8.0,
+        "voltage_v": 560.0,
+        "current_a": 120.0,
+    }
 
     def _stats(vals):
         arr = list(vals)
         if not arr:
             return 0.0, 0.0, 0.0
         return min(arr), max(arr), (sum(arr) / len(arr))
+
+    def _slew(curr: float, target: float, max_rate_s: float, dt_s: float):
+        step = max(0.0, max_rate_s) * max(0.0, dt_s)
+        if target > curr + step:
+            return curr + step
+        if target < curr - step:
+            return curr - step
+        return target
+
+    def _smooth_walk(curr: float, lo: float, hi: float, drift_s: float, noise: float, max_rate_s: float, dt_s: float):
+        target = curr + random.uniform(-drift_s, drift_s) * dt_s
+        target = max(lo, min(hi, target))
+        noisy_target = target + random.gauss(0.0, noise * math.sqrt(max(dt_s, 1e-4)))
+        next_v = _slew(curr, noisy_target, max_rate_s, dt_s)
+        return max(lo, min(hi, next_v))
 
     def _status_from_value(key: str, v: float):
         if key in {"db_power", "db_tr_power_kw"}:
@@ -172,7 +195,7 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                 if not emergency_state["active"]:
                     # Tick all sensors
                     for s in SENSORS.values():
-                        s.tick()
+                        s.tick(SIM_TICK_SEC)
 
                     # Alarm lifecycle management (active + resolved + history)
                     for key, s in SENSORS.items():
@@ -191,25 +214,49 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                     DASH_HIST["h2"].append(dm["h2"])
                     DASH_HIST["o2"].append(dm["o2"])
 
-                    load_penalty = min(12.0, fault_count * 3.0)
-                    dash_state["elec_eff_target"] += random.uniform(-0.35, 0.35)
-                    dash_state["elec_eff_target"] = max(42.0, min(60.0, dash_state["elec_eff_target"] - load_penalty * 0.08))
-                    dash_state["elec_eff"] += (dash_state["elec_eff_target"] - dash_state["elec_eff"]) * 0.15 + random.uniform(-0.15, 0.15)
+                    load_penalty = min(7.0, fault_count * 1.5)
+                    base_eff_target = max(44.0, min(58.0, 53.0 - load_penalty))
+                    wandered_target = base_eff_target + random.uniform(-0.15, 0.15)
+                    dash_state["elec_eff_target"] = _slew(
+                        dash_state["elec_eff_target"], wandered_target, max_rate_s=0.8, dt_s=SIM_TICK_SEC
+                    )
+                    elec_eff_target = dash_state["elec_eff_target"] + random.gauss(0.0, 0.06)
+                    dash_state["elec_eff"] = _slew(
+                        dash_state["elec_eff"], elec_eff_target, max_rate_s=1.0, dt_s=SIM_TICK_SEC
+                    )
                     dash_state["elec_eff"] = max(40.0, min(62.0, dash_state["elec_eff"]))
-                    dash_state["conv_eff"] = max(48.0, min(70.0, dash_state["elec_eff"] + 4.5 + random.uniform(-1.0, 1.0)))
+
+                    conv_target = dash_state["elec_eff"] + 4.2 + random.uniform(-0.18, 0.18)
+                    dash_state["conv_eff"] = _slew(
+                        dash_state["conv_eff"], conv_target, max_rate_s=1.0, dt_s=SIM_TICK_SEC
+                    )
+                    dash_state["conv_eff"] = max(48.0, min(70.0, dash_state["conv_eff"]))
 
                     h2_rate_kg_h = max(1.2, min(10.0, (dm["total_flow"] * dm["h2"]) / 180.0))
                     power_kw = h2_rate_kg_h * 33.3 * (dash_state["elec_eff"] / 100.0)
                     power_kw = max(10.0, min(180.0, power_kw))
-                    voltage_v = max(360.0, min(760.0, 560.0 + random.uniform(-80.0, 90.0)))
-                    current_a = (power_kw * 1000.0) / max(voltage_v, 1.0)
-                    dash_state["perf_ratio"] = max(55.0, min(110.0, (power_kw / 120.0) * 100.0))
+                    voltage_target = 520.0 + (power_kw / 180.0) * 140.0 + random.uniform(-8.0, 8.0)
+                    runtime_state["voltage_v"] = _slew(
+                        runtime_state["voltage_v"], voltage_target, max_rate_s=40.0, dt_s=SIM_TICK_SEC
+                    )
+                    voltage_v = max(360.0, min(760.0, runtime_state["voltage_v"]))
+                    current_target = (power_kw * 1000.0) / max(voltage_v, 1.0)
+                    runtime_state["current_a"] = _slew(
+                        runtime_state["current_a"], current_target, max_rate_s=65.0, dt_s=SIM_TICK_SEC
+                    )
+                    current_a = max(0.0, runtime_state["current_a"])
+
+                    perf_target = (power_kw / 120.0) * 100.0
+                    dash_state["perf_ratio"] = _slew(
+                        dash_state["perf_ratio"], perf_target, max_rate_s=2.2, dt_s=SIM_TICK_SEC
+                    )
+                    dash_state["perf_ratio"] = max(55.0, min(110.0, dash_state["perf_ratio"]))
 
                     step_hours = SIM_TICK_SEC / 3600.0
                     dash_state["energy_kwh"] += power_kw * step_hours
                     h2_used = h2_rate_kg_h * step_hours
                     dash_state["h2_consumed_kg"] += h2_used
-                    split = random.uniform(0.45, 0.55)
+                    split = 0.5 + random.uniform(-0.015, 0.015)
                     use_t1_target = h2_used * split
                     use_t2_target = h2_used - use_t1_target
                     take_t1 = min(dash_state["h2_t1_remaining_kg"], use_t1_target)
@@ -239,8 +286,10 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
 
                     power_kw = 0.0
                     h2_rate_kg_h = 0.0
-                    voltage_v = 0.0
-                    current_a = 0.0
+                    runtime_state["voltage_v"] = _slew(runtime_state["voltage_v"], 0.0, max_rate_s=130.0, dt_s=SIM_TICK_SEC)
+                    runtime_state["current_a"] = _slew(runtime_state["current_a"], 0.0, max_rate_s=180.0, dt_s=SIM_TICK_SEC)
+                    voltage_v = runtime_state["voltage_v"]
+                    current_a = runtime_state["current_a"]
                     dash_state["elec_eff"] = 0.0
                     dash_state["conv_eff"] = 0.0
                     dash_state["perf_ratio"] = 0.0
@@ -255,10 +304,24 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
 
                 active_alarm_count = len(ACTIVE_ALARMS)
 
+                # Slow-changing system diagnostics (resource/system cards)
+                runtime_state["cpu_load"] = _smooth_walk(
+                    runtime_state["cpu_load"], 20.0, 85.0, drift_s=1.8, noise=0.25, max_rate_s=2.2, dt_s=SIM_TICK_SEC
+                )
+                runtime_state["net_health"] = _smooth_walk(
+                    runtime_state["net_health"], 88.0, 100.0, drift_s=0.9, noise=0.15, max_rate_s=1.0, dt_s=SIM_TICK_SEC
+                )
+                runtime_state["storage_pct"] = _smooth_walk(
+                    runtime_state["storage_pct"], 40.0, 70.0, drift_s=0.05, noise=0.02, max_rate_s=0.15, dt_s=SIM_TICK_SEC
+                )
+                runtime_state["device_online"] = _smooth_walk(
+                    runtime_state["device_online"], 7.7, 8.3, drift_s=0.03, noise=0.01, max_rate_s=0.08, dt_s=SIM_TICK_SEC
+                )
+
                 # Network connectivity simulation
                 if network_state["status"] == "Connecting":
-                    network_state["connect_ticks"] = max(0, int(network_state["connect_ticks"]) - 1)
-                    network_state["signal"] = max(0.1, min(1.0, float(network_state["signal"]) + random.uniform(0.05, 0.15)))
+                    network_state["connect_ticks"] = max(0.0, float(network_state["connect_ticks"]) - SIM_TICK_SEC)
+                    network_state["signal"] = max(0.1, min(1.0, float(network_state["signal"]) + random.uniform(0.015, 0.05)))
                     network_state["mqtt_status"] = "Connecting"
                     network_state["plc_status"] = "Connecting"
                     network_state["latency_ms"] = "-"
@@ -266,7 +329,7 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                     if network_state["connect_ticks"] <= 0:
                         if random.random() < 0.88:
                             network_state["status"] = "Connected"
-                            network_state["signal"] = max(0.35, min(1.0, float(network_state["signal"]) + random.uniform(0.1, 0.25)))
+                            network_state["signal"] = max(0.35, min(1.0, float(network_state["signal"]) + random.uniform(0.05, 0.12)))
                             if network_state["dhcp"]:
                                 network_state["ip"] = f"192.168.10.{random.randint(20, 230)}"
                             else:
@@ -286,7 +349,7 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                             network_state["conn_result"] = "Failed"
                             network_state["apply_msg"] = "Connection failed"
                 elif network_state["status"] == "Connected":
-                    network_state["signal"] = max(0.3, min(1.0, float(network_state["signal"]) + random.uniform(-0.07, 0.08)))
+                    network_state["signal"] = max(0.3, min(1.0, float(network_state["signal"]) + random.uniform(-0.03, 0.035)))
                     network_state["latency_ms"] = f"{random.randint(18, 95)} ms"
                     network_state["packet_loss"] = f"{random.uniform(0.0, 2.5):.1f}%"
                     if random.random() < 0.03:
@@ -315,7 +378,7 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                 detail_hist["h2_remaining_pct"].append(h2_remaining_pct)
                 detail_hist["sys_alarm_events"].append(float(len(ALARMS)))
                 detail_hist["net_signal"].append(max(0.0, min(1.0, float(network_state["signal"]))) * 100.0)
-                detail_hist["device_online"].append(8.0 + random.uniform(-0.3, 0.3))
+                detail_hist["device_online"].append(runtime_state["device_online"])
                 stats_reliability = max(0.0, 100.0 - (sum(1 for s in SENSORS.values() if s.status != "OK") / max(len(SENSORS), 1)) * 100.0)
                 detail_hist["stats_reliability"].append(stats_reliability)
 
@@ -604,9 +667,9 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
                 # â”€â”€ PAGE 3: System â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 elif idx == 3:
                     health_data = {
-                        "CPU Load": f"{random.uniform(20,85):.0f}%",
-                        "Network":  f"{random.uniform(90,100):.0f}%",
-                        "Storage":  f"{random.uniform(40,70):.0f}%",
+                        "CPU Load": f"{runtime_state['cpu_load']:.0f}%",
+                        "Network":  f"{runtime_state['net_health']:.0f}%",
+                        "Storage":  f"{runtime_state['storage_pct']:.0f}%",
                         "PLC Uptime": str(datetime.now() - uptime_start).split('.')[0],
                     }
                     for lbl, val in health_data.items():
@@ -874,4 +937,3 @@ def start_simulation(page, refs, current_page, emergency_state, network_state, d
             await asyncio.sleep(SIM_TICK_SEC)
 
     page.run_task(simulate)
-

@@ -231,7 +231,7 @@ def main(page: ft.Page):
             return
 
         network_state["status"] = "Connecting"
-        network_state["connect_ticks"] = random.randint(2, 4)
+        network_state["connect_ticks"] = random.uniform(2.5, 5.0)
         network_state["signal"] = random.uniform(0.2, 0.45)
         network_state["ip"] = "-"
         network_state["mqtt_status"] = "Connecting"

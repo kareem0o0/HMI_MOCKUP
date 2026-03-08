@@ -33,7 +33,7 @@ HISTORY_LONG_LEN = 600  # long trend for per-sensor detail page
 
 class Sensor:
     def __init__(self, name, unit, low, high, warn_lo, warn_hi,
-                 initial, noise, drift_speed, color):
+                 initial, noise, drift_speed, color, tau_s=4.0, max_delta_s=None):
         self.name        = name
         self.unit        = unit
         self.low         = low
@@ -44,6 +44,10 @@ class Sensor:
         self.noise       = noise
         self.drift_speed = drift_speed
         self.color       = color
+        self.tau_s       = max(0.2, float(tau_s))
+        span = max(abs(self.high - self.low), 1e-6)
+        default_rate = span * 0.025
+        self.max_delta_s = float(max_delta_s) if max_delta_s is not None else default_rate
         self._target     = float(initial)
         self.history     = collections.deque(
             [float(initial)] * HISTORY_LEN, maxlen=HISTORY_LEN
@@ -56,12 +60,32 @@ class Sensor:
         self.sum_seen = float(initial)
         self.samples_seen = 1
 
-    def tick(self):
-        # slowly drift target, then add noise
-        self._target += random.uniform(-self.drift_speed, self.drift_speed)
-        self._target  = max(self.low * 0.9, min(self.high * 1.1, self._target))
-        self.value    = self._target + random.gauss(0, self.noise)
-        self.value    = max(self.low * 0.85, min(self.high * 1.15, self.value))
+    def tick(self, dt_s=1.0):
+        dt = max(0.02, float(dt_s))
+        status_before = self.status
+        fault_mult = 1.8 if status_before != "OK" else 1.0
+
+        # Drift process target with limited random walk.
+        drift_step = self.drift_speed * dt * fault_mult
+        self._target += random.uniform(-drift_step, drift_step)
+        self._target = max(self.low * 0.9, min(self.high * 1.1, self._target))
+
+        # First-order lag dynamics (inertia) toward target.
+        alpha = 1.0 - math.exp(-dt / self.tau_s)
+        proposed = self.value + (self._target - self.value) * alpha
+
+        # Small measurement/process noise; scaled by sqrt(dt).
+        proposed += random.gauss(0.0, self.noise * math.sqrt(dt))
+
+        # Rate limiter avoids non-physical jumps between consecutive updates.
+        max_step = max(1e-6, self.max_delta_s * dt * fault_mult)
+        delta = proposed - self.value
+        if delta > max_step:
+            delta = max_step
+        elif delta < -max_step:
+            delta = -max_step
+        self.value += delta
+        self.value = max(self.low * 0.85, min(self.high * 1.15, self.value))
         self.history.append(self.value)
         self.history_long.append(self.value)
         self.min_seen = min(self.min_seen, self.value)
@@ -90,23 +114,23 @@ class Sensor:
 
 # Define the sensor fleet
 SENSORS: dict[str, Sensor] = {
-    "temp_1":    Sensor("Reactor Temp",     "Â°C",  0,   200, 20, 160,  85,  1.2, 0.8, C["red"]),
-    "temp_2":    Sensor("Coolant Temp",     "Â°C",  0,   120, 10,  90,  42,  0.8, 0.5, C["amber"]),
-    "temp_3":    Sensor("Exhaust Temp",     "Â°C",  0,   180, 15, 145,  76,  1.0, 0.7, C["red"]),
-    "pressure":  Sensor("Line Pressure",    "bar", 0,    12, 1,    9,  5.2, 0.15,0.1, C["blue"]),
-    "pressure_2":Sensor("Reactor Pressure", "bar", 0,    18, 2,   14,  8.4, 0.18,0.1, C["blue"]),
-    "pressure_3":Sensor("Feed Pressure",    "bar", 0,    10, 1,    8,  4.7, 0.13,0.1, C["blue"]),
-    "pressure_4":Sensor("Purge Pressure",   "bar", 0,     8, 0.8,  6,  3.2, 0.12,0.08,C["blue"]),
-    "flow_in":   Sensor("Inlet Flow",       "L/m", 0,   500, 50, 420, 220,  4.0, 3.0, C["teal"]),
-    "flow_out":  Sensor("Outlet Flow",      "L/m", 0,   500, 50, 420, 215,  3.8, 2.8, C["purple"]),
-    "flow_3":    Sensor("Recycle Flow",     "L/m", 0,   350, 40, 300, 132,  3.3, 2.2, C["teal"]),
-    "h2":        Sensor("Hydrogen (H2)",    "%",   0,     4, 0.1,  3.0, 0.82,0.04,0.02,C["amber"]),
-    "oxygen":    Sensor("Oxygen",           "%",   0,    25, 18,  23.5,20.9,0.08,0.05,C["green"]),
-    "humidity":  Sensor("Ambient Humidity", "%",   0,   100, 20,  80,  55,  0.5, 0.3, C["green"]),
-    "vibration": Sensor("Vibration",        "mm/s",0,    20, 0,   12,  3.5, 0.3, 0.2, C["amber"]),
-    "power":     Sensor("Power Draw",       "kW",  0,   150, 10, 120,  68,  1.5, 1.0, C["blue"]),
-    "ph":        Sensor("pH Level",         "pH",  0,    14, 6,    8,  7.1, 0.05,0.03,C["green"]),
-    "level":     Sensor("Tank Level",       "%",   0,   100, 10,  90,  72,  0.4, 0.5, C["teal"]),
+    "temp_1":    Sensor("Reactor Temp",     "Â°C",  0,   200, 20, 160,  85, 0.35, 0.22, C["red"],    tau_s=5.0,  max_delta_s=1.20),
+    "temp_2":    Sensor("Coolant Temp",     "Â°C",  0,   120, 10,  90,  42, 0.25, 0.16, C["amber"],  tau_s=6.5,  max_delta_s=0.80),
+    "temp_3":    Sensor("Exhaust Temp",     "Â°C",  0,   180, 15, 145,  76, 0.30, 0.20, C["red"],    tau_s=5.5,  max_delta_s=1.00),
+    "pressure":  Sensor("Line Pressure",    "bar", 0,    12, 1,    9,  5.2, 0.03, 0.06, C["blue"],   tau_s=2.2,  max_delta_s=0.25),
+    "pressure_2":Sensor("Reactor Pressure", "bar", 0,    18, 2,   14,  8.4, 0.04, 0.06, C["blue"],   tau_s=2.5,  max_delta_s=0.30),
+    "pressure_3":Sensor("Feed Pressure",    "bar", 0,    10, 1,    8,  4.7, 0.03, 0.05, C["blue"],   tau_s=2.2,  max_delta_s=0.25),
+    "pressure_4":Sensor("Purge Pressure",   "bar", 0,     8, 0.8,  6,  3.2, 0.025,0.04, C["blue"],   tau_s=2.0,  max_delta_s=0.20),
+    "flow_in":   Sensor("Inlet Flow",       "L/m", 0,   500, 50, 420, 220, 1.00, 1.20, C["teal"],   tau_s=1.8,  max_delta_s=8.00),
+    "flow_out":  Sensor("Outlet Flow",      "L/m", 0,   500, 50, 420, 215, 0.95, 1.05, C["purple"], tau_s=1.9,  max_delta_s=7.50),
+    "flow_3":    Sensor("Recycle Flow",     "L/m", 0,   350, 40, 300, 132, 0.85, 0.90, C["teal"],   tau_s=2.1,  max_delta_s=6.00),
+    "h2":        Sensor("Hydrogen (H2)",    "%",   0,     4, 0.1,  3.0, 0.82,0.008,0.006,C["amber"], tau_s=4.0,  max_delta_s=0.030),
+    "oxygen":    Sensor("Oxygen",           "%",   0,    25, 18,  23.5,20.9,0.010,0.003,C["green"], tau_s=8.0,  max_delta_s=0.020),
+    "humidity":  Sensor("Ambient Humidity", "%",   0,   100, 20,  80,  55, 0.12, 0.08, C["green"],  tau_s=9.0,  max_delta_s=0.25),
+    "vibration": Sensor("Vibration",        "mm/s",0,    20, 0,   12,  3.5, 0.06, 0.07, C["amber"],  tau_s=3.5,  max_delta_s=0.25),
+    "power":     Sensor("Power Draw",       "kW",  0,   150, 10, 120,  68, 0.35, 0.55, C["blue"],   tau_s=1.8,  max_delta_s=3.00),
+    "ph":        Sensor("pH Level",         "pH",  0,    14, 6,    8,  7.1, 0.008,0.003,C["green"], tau_s=12.0, max_delta_s=0.020),
+    "level":     Sensor("Tank Level",       "%",   0,   100, 10,  90,  72, 0.04, 0.02, C["teal"],   tau_s=28.0, max_delta_s=0.08),
 }
 
 ALARMS: collections.deque = collections.deque(maxlen=80)            # recent event feed
