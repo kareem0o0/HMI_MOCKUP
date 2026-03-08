@@ -7,6 +7,7 @@ import flet as ft
 from models import (
     C, SENSORS, _activate_system_alarm, _resolve_system_alarm,
 )
+from credentials import TRIAL_KEY_GROUPS, ADMIN_KEY
 from ui_components import nav_btn
 from ui_pages import (
     build_dashboard, build_sensor_panel, build_sensor_detail,
@@ -26,6 +27,24 @@ def main(page: ft.Page):
     selected_sensor = {"key": None}
     selected_card = {"key": None, "from_idx": 0}
     emergency_state = {"active": False}
+    access_state = {
+        "authenticated": False,
+        "mode": "none",          # "trial" | "admin" | "none"
+        "trial_seconds_left": 0.0,
+        "trial_group_id": None,
+    }
+    trial_groups = []
+    for g in TRIAL_KEY_GROUPS:
+        keys = [k.strip() for k in g.get("keys", []) if isinstance(k, str) and k.strip()]
+        if not keys:
+            continue
+        duration = int(g.get("duration_sec", 60))
+        trial_groups.append({
+            "id": g.get("id", f"trial_{len(trial_groups) + 1}"),
+            "duration_sec": max(1, duration),
+            "keys": keys,
+            "next_idx": 0,
+        })
     network_defaults = {
         "media": "Wi-Fi",
         "ssid": "FuelCell-IoT",
@@ -72,8 +91,154 @@ def main(page: ft.Page):
 
     # â”€â”€ Build all pages once (lazy rebuild on nav) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     pages_cache = {}
+    access_overlay_ref = ft.Ref[ft.Container]()
+    hmi_shell_ref = ft.Ref[ft.Container]()
+    access_key_ref = ft.Ref[ft.TextField]()
+    access_msg_ref = ft.Ref[ft.Text]()
+    access_badge_ref = ft.Ref[ft.Text]()
+    trial_timer_ref = ft.Ref[ft.Text]()
+    trial_timer_box_ref = ft.Ref[ft.Container]()
+
+    def _fmt_trial(sec_left: float):
+        total = max(0, int(sec_left))
+        return f"{total // 60:02d}:{total % 60:02d}"
+
+    def _set_access_msg(msg: str, color: str = C["gray"]):
+        if access_msg_ref.current:
+            access_msg_ref.current.value = msg
+            access_msg_ref.current.color = color
+            access_msg_ref.current.update()
+
+    def _reset_trial_cycles():
+        for grp in trial_groups:
+            grp["next_idx"] = 0
+
+    def _update_access_banner():
+        mode = access_state["mode"]
+        authed = access_state["authenticated"]
+        if access_badge_ref.current:
+            if authed and mode == "admin":
+                access_badge_ref.current.value = "ADMIN ACCESS"
+                access_badge_ref.current.color = C["blue"]
+            elif authed and mode == "trial":
+                access_badge_ref.current.value = "TRIAL ACCESS"
+                access_badge_ref.current.color = C["amber"]
+            else:
+                access_badge_ref.current.value = "LOCKED"
+                access_badge_ref.current.color = C["red"]
+            access_badge_ref.current.update()
+
+        if trial_timer_box_ref.current:
+            trial_timer_box_ref.current.visible = authed and mode == "trial"
+            trial_timer_box_ref.current.update()
+        if trial_timer_ref.current and authed and mode == "trial":
+            trial_timer_ref.current.value = _fmt_trial(access_state["trial_seconds_left"])
+            trial_timer_ref.current.update()
+
+    def _show_entry_overlay():
+        if hmi_shell_ref.current:
+            hmi_shell_ref.current.visible = False
+            hmi_shell_ref.current.update()
+        if access_overlay_ref.current:
+            access_overlay_ref.current.visible = True
+            access_overlay_ref.current.update()
+
+    def _hide_entry_overlay():
+        if hmi_shell_ref.current:
+            hmi_shell_ref.current.visible = True
+            hmi_shell_ref.current.update()
+        if access_overlay_ref.current:
+            access_overlay_ref.current.visible = False
+            access_overlay_ref.current.update()
+
+    def _enter_hmi_home():
+        current_page["idx"] = 0
+        selected_sensor["key"] = None
+        selected_card["key"] = None
+        refs["sd_sensor_key"] = None
+        pages_cache.pop(1, None)
+        pages_cache.pop(6, None)
+        if nav_col_ref.current:
+            nav_col_ref.current.controls = make_nav(0)
+        if content_ref.current:
+            content_ref.current.controls = [get_page(0)]
+
+    def revoke_access(reason: str = "Access ended."):
+        access_state["authenticated"] = False
+        access_state["mode"] = "none"
+        access_state["trial_group_id"] = None
+        access_state["trial_seconds_left"] = 0.0
+        _enter_hmi_home()
+        _show_entry_overlay()
+        _update_access_banner()
+        if access_key_ref.current:
+            access_key_ref.current.value = ""
+            access_key_ref.current.update()
+        _set_access_msg(reason, C["amber"])
+        page.update()
+
+    def _grant_trial_access(group: dict):
+        access_state["authenticated"] = True
+        access_state["mode"] = "trial"
+        access_state["trial_group_id"] = group["id"]
+        access_state["trial_seconds_left"] = float(group["duration_sec"])
+        group["next_idx"] = (group["next_idx"] + 1) % len(group["keys"])
+        _enter_hmi_home()
+        _hide_entry_overlay()
+        _update_access_banner()
+        if access_key_ref.current:
+            access_key_ref.current.value = ""
+            access_key_ref.current.update()
+        _set_access_msg("", C["gray"])
+        page.update()
+
+    def _grant_admin_access():
+        access_state["authenticated"] = True
+        access_state["mode"] = "admin"
+        access_state["trial_group_id"] = None
+        access_state["trial_seconds_left"] = 0.0
+        _reset_trial_cycles()
+        _enter_hmi_home()
+        _hide_entry_overlay()
+        _update_access_banner()
+        if access_key_ref.current:
+            access_key_ref.current.value = ""
+            access_key_ref.current.update()
+        _set_access_msg("", C["gray"])
+        page.update()
+
+    def submit_access(_):
+        key = (access_key_ref.current.value if access_key_ref.current else "") or ""
+        key = key.strip()
+
+        if not key:
+            _set_access_msg("Enter a pass key.", C["amber"])
+            return
+
+        if key == ADMIN_KEY:
+            _grant_admin_access()
+            return
+
+        if not trial_groups:
+            _set_access_msg("No trial keys configured in credentials.py.", C["red"])
+            return
+
+        matched_group = None
+        for grp in trial_groups:
+            expected = grp["keys"][grp["next_idx"] % len(grp["keys"])]
+            if key == expected:
+                matched_group = grp
+                break
+
+        if matched_group is not None:
+            _grant_trial_access(matched_group)
+            return
+
+        _set_access_msg("Invalid or expired pass key.", C["red"])
 
     def open_sensor_detail(sensor_key: str):
+        if not access_state["authenticated"]:
+            return
         current_page["idx"] = 1
         selected_sensor["key"] = sensor_key
         selected_card["key"] = None
@@ -99,6 +264,8 @@ def main(page: ft.Page):
         return build_sensor_panel(local_refs, on_sensor_click=open_sensor_detail)
 
     def open_card_detail(detail_key: str):
+        if not access_state["authenticated"]:
+            return
         selected_card["key"] = detail_key
         selected_card["from_idx"] = current_page["idx"]
         current_page["idx"] = 6
@@ -400,6 +567,9 @@ def main(page: ft.Page):
     def on_estop_click(_):
         set_emergency_stop(not emergency_state["active"])
 
+    def on_exit_access(_):
+        revoke_access("Session closed. Enter pass key to access the demo.")
+
     topbar = ft.Container(
         bgcolor=C["header"],
         padding=ft.Padding.symmetric(horizontal=20, vertical=10),
@@ -429,6 +599,42 @@ def main(page: ft.Page):
                     padding=ft.Padding.symmetric(horizontal=10, vertical=4),
                     ink=True,
                     on_click=lambda e: switch_page(4),
+                ),
+                ft.Container(width=10),
+                ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.VERIFIED_USER, color=C["white"], size=14),
+                        ft.Text("LOCKED", ref=access_badge_ref, color=C["red"], size=10,
+                                weight=ft.FontWeight.W_700),
+                    ], spacing=4),
+                    bgcolor=C["card2"],
+                    border_radius=6,
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                ),
+                ft.Container(width=8),
+                ft.Container(
+                    ref=trial_timer_box_ref,
+                    visible=False,
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.HOURGLASS_BOTTOM, color=C["amber"], size=14),
+                        ft.Text("01:00", ref=trial_timer_ref, color=C["amber"], size=10,
+                                weight=ft.FontWeight.W_700),
+                    ], spacing=4),
+                    bgcolor=C["amber"] + "18",
+                    border_radius=6,
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                ),
+                ft.Container(width=8),
+                ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.LOGOUT, color=C["white"], size=14),
+                        ft.Text("Exit", color=C["white"], size=10, weight=ft.FontWeight.W_700),
+                    ], spacing=4),
+                    bgcolor=C["gray2"],
+                    border_radius=6,
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                    ink=True,
+                    on_click=on_exit_access,
                 ),
                 ft.Container(width=16),
                 ft.Container(
@@ -499,6 +705,8 @@ def main(page: ft.Page):
     )
 
     def switch_page(idx):
+        if not access_state["authenticated"]:
+            return
         current_page["idx"] = idx
         selected_sensor["key"] = None
         refs["sd_sensor_key"] = None
@@ -523,17 +731,102 @@ def main(page: ft.Page):
         ], spacing=6),
     )
 
+    # Entry/access overlay
+    access_overlay = ft.Container(
+        ref=access_overlay_ref,
+        visible=True,
+        expand=True,
+        bgcolor=C["bg"] + "F2",
+        alignment=ft.Alignment(0, 0),
+        content=ft.Container(
+            width=760,
+            border_radius=18,
+            bgcolor=C["panel"],
+            border=ft.Border(
+                left=ft.BorderSide(1, C["border"]),
+                right=ft.BorderSide(1, C["border"]),
+                top=ft.BorderSide(1, C["border"]),
+                bottom=ft.BorderSide(1, C["border"]),
+            ),
+            shadow=ft.BoxShadow(
+                blur_radius=28,
+                spread_radius=0,
+                color="#00000077",
+                offset=ft.Offset(0, 14),
+            ),
+            padding=40,
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon(ft.Icons.LOCK, color=C["teal"], size=24),
+                    ft.Text("Access Gateway", color=C["white"], size=26, weight=ft.FontWeight.W_700),
+                ], spacing=10, alignment=ft.MainAxisAlignment.CENTER),
+                ft.Container(height=10),
+                ft.Text(
+                    "Enter your pass key to continue.",
+                    color=C["gray"], size=12, text_align=ft.TextAlign.CENTER
+                ),
+                ft.Container(height=26),
+                ft.TextField(
+                    ref=access_key_ref,
+                    label="Pass Key",
+                    password=True,
+                    can_reveal_password=True,
+                    text_size=20,
+                    border_color=C["border"],
+                    bgcolor=C["card2"],
+                    color=C["white"],
+                    label_style=ft.TextStyle(color=C["gray"], size=13),
+                    content_padding=ft.Padding.symmetric(horizontal=16, vertical=18),
+                    on_submit=submit_access,
+                ),
+                ft.Container(height=18),
+                ft.Row([
+                    ft.ElevatedButton(
+                        "Enter HMI",
+                        icon=ft.Icons.LOGIN,
+                        width=320,
+                        height=52,
+                        on_click=submit_access,
+                        style=ft.ButtonStyle(
+                            bgcolor=C["teal"],
+                            color=C["bg"],
+                            text_style=ft.TextStyle(size=15, weight=ft.FontWeight.W_700),
+                        ),
+                    ),
+                ], alignment=ft.MainAxisAlignment.CENTER),
+                ft.Container(height=16),
+                ft.Text("", ref=access_msg_ref, color=C["gray"], size=12, text_align=ft.TextAlign.CENTER),
+                ft.Container(height=8),
+                ft.Text("Demo access system", color=C["gray"], size=10, text_align=ft.TextAlign.CENTER),
+            ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+        ),
+        padding=ft.Padding.symmetric(horizontal=24, vertical=24),
+    )
+
     # â”€â”€ Full layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    page.add(ft.Column([
-        topbar,
-        ft.Row([
-            sidebar,
-            content_area,
-        ], spacing=0, expand=True,
-           vertical_alignment=ft.CrossAxisAlignment.STRETCH),
-        statusbar,
-    ], spacing=0, expand=True))
+    hmi_shell = ft.Container(
+        ref=hmi_shell_ref,
+        visible=False,
+        expand=True,
+        content=ft.Column([
+            topbar,
+            ft.Row([
+                sidebar,
+                content_area,
+            ], spacing=0, expand=True,
+               vertical_alignment=ft.CrossAxisAlignment.STRETCH),
+            statusbar,
+        ], spacing=0, expand=True),
+    )
+
+    page.add(ft.Stack([
+        hmi_shell,
+        access_overlay,
+    ], expand=True, alignment=ft.Alignment(0, 0)))
     refresh_operation_ui()
+    _show_entry_overlay()
+    _update_access_banner()
+    _set_access_msg("Enter a pass key to access the demo.", C["gray"])
 
     # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  SIMULATION + LIVE-UPDATE THREAD
@@ -554,8 +847,26 @@ def main(page: ft.Page):
         "perf_ratio": 88.0,
     }
 
+    async def access_session_loop():
+        while True:
+            try:
+                if access_state["authenticated"] and access_state["mode"] == "trial":
+                    access_state["trial_seconds_left"] = max(
+                        0.0, float(access_state["trial_seconds_left"]) - 0.2
+                    )
+                    if trial_timer_ref.current:
+                        trial_timer_ref.current.value = _fmt_trial(access_state["trial_seconds_left"])
+                        trial_timer_ref.current.update()
+                    if access_state["trial_seconds_left"] <= 0:
+                        revoke_access("Trial time expired. Enter a valid pass key to continue.")
+                await asyncio.sleep(0.2)
+            except Exception as ex:
+                print(f"[ACCESS] {ex}")
+                await asyncio.sleep(0.5)
+
     start_simulation(page, refs, current_page, emergency_state, network_state, dash_state,
                     clock_ref, alarm_badge, uptime_start, selected_card, content_ref)
+    page.run_task(access_session_loop)
 
 
 
